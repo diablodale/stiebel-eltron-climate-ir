@@ -242,6 +242,187 @@ def visualize_signal(analysis):
         "ascii_viz": ascii_viz
     }
 
+def detect_ir_protocol(analysis):
+    """
+    Attempt to detect which IR protocol is being used based on timing patterns.
+    Returns the protocol name and any protocol-specific information.
+    """
+    # Extract timing info
+    timings = analysis["timings_us"]
+
+    # Check for Stiebel Eltron ACP 35 pattern
+    if analysis["frequency_hz"] > 37800 and analysis["frequency_hz"] < 38200:
+        # The Stiebel Eltron ACP 35 has a very specific pattern
+        # - Header: ~3000-3200µs (0x00C2-0x00C5 in raw codes)
+        # - Uses ~500-650µs on pulses (0x0013-0x0017)
+        # - Alternates with either short ~500-650µs off pulses (0x0013-0x0017)
+        # - Or long ~1900-2100µs off pulses (0x004A-0x004C)
+
+        # Check the header
+        if len(timings) > 4:
+            header_match = False
+            if 3000 < timings[0] < 3300:  # Header ON time
+                header_match = True
+
+            # Check the pattern of alternating ON/OFF pulses
+            on_pulses = [timings[i] for i in range(0, min(40, len(timings)), 2)]
+            off_pulses = [timings[i] for i in range(1, min(40, len(timings)), 2)]
+
+            # Stiebel pattern has consistent ON pulses around 550-600µs
+            on_avg = np.mean(on_pulses)
+            on_std = np.std(on_pulses)
+
+            # And two types of OFF pulses: short (~550-600µs) and long (~1900-2100µs)
+            off_sorted = sorted(off_pulses)
+            if len(off_sorted) > 10:
+                has_two_off_types = False
+
+                # Check distribution of OFF times
+                short_offs = [t for t in off_pulses if t < 800]
+                long_offs = [t for t in off_pulses if t > 1500]
+
+                if short_offs and long_offs:
+                    short_avg = np.mean(short_offs)
+                    long_avg = np.mean(long_offs)
+
+                    # Stiebel Eltron ACP 35 specific timing pattern
+                    if (450 < on_avg < 650 and on_std < 200 and
+                        450 < short_avg < 650 and
+                        1800 < long_avg < 2200):
+                        return "Stiebel Eltron ACP 35", {
+                            "frequency": analysis["frequency_hz"],
+                            "on_pulse_avg": on_avg,
+                            "short_off_avg": short_avg,
+                            "long_off_avg": long_avg,
+                            "encoding": "Likely pulse distance encoding (similar to NEC)"
+                        }
+
+    # If no specific protocol detected, return generic
+    return "Generic", {}
+
+def decode_stiebel_eltron(analysis):
+    """
+    Decode a Stiebel Eltron ACP 35 IR signal.
+    The Stiebel Eltron ACP 35 uses a pulse distance encoding similar to NEC.
+    """
+    timings = analysis["timings_us"]
+
+    # Find the threshold between short and long OFF pulses
+    off_pulses = [timings[i] for i in range(1, len(timings), 2)]
+    short_offs = [t for t in off_pulses if t < 800]
+    long_offs = [t for t in off_pulses if t > 1500]
+
+    if not short_offs or not long_offs:
+        return {"error": "Could not identify pulse patterns"}
+
+    threshold = (max(short_offs) + min(long_offs)) / 2
+
+    # Skip header (usually first 8-10 values)
+    # The real data starts after the initial sequence
+    data_start = 10  # Skip first 5 pairs
+
+    # Extract the bits (long OFF pulse = 1, short OFF pulse = 0)
+    data_bits = []
+    for i in range(data_start, len(timings), 2):
+        if i+1 < len(timings):
+            if timings[i+1] > threshold:
+                data_bits.append(1)  # Long OFF = 1
+            else:
+                data_bits.append(0)  # Short OFF = 0
+
+    # Group bits into bytes
+    bytes_msb = []
+    bytes_lsb = []
+    for i in range(0, len(data_bits), 8):
+        if i + 8 <= len(data_bits):
+            byte = data_bits[i:i+8]
+
+            # MSB first
+            byte_val_msb = 0
+            for bit in byte:
+                byte_val_msb = (byte_val_msb << 1) | bit
+            bytes_msb.append(f"{byte_val_msb:02X}")
+
+            # LSB first
+            byte_val_lsb = 0
+            for bit_idx in range(7, -1, -1):
+                byte_val_lsb = (byte_val_lsb << 1) | byte[bit_idx]
+            bytes_lsb.append(f"{byte_val_lsb:02X}")
+
+    # Analyze command structure
+    command_analysis = analyze_stiebel_command(bytes_msb, data_bits)
+
+    return {
+        "binary": data_bits,
+        "bytes_msb": bytes_msb,
+        "bytes_lsb": bytes_lsb,
+        "command_analysis": command_analysis
+    }
+
+def analyze_stiebel_command(bytes_data, bits):
+    """
+    Analyze a Stiebel Eltron ACP 35 command to identify function.
+    Based on comparing the provided sample codes.
+    """
+    if len(bytes_data) < 6:
+        return {"error": "Not enough data to analyze command"}
+
+    command_info = {
+        "likely_device_id": bytes_data[0],
+        "command_type": "Unknown"
+    }
+
+    # Based on your examples, try to identify command type
+    # Comparing power commands
+    if len(bytes_data) >= 8:
+        # The 5th byte (index 4) seems to change between power states
+        power_byte = bytes_data[4]
+        mode_byte = bytes_data[3]
+        temp_byte = bytes_data[5]
+        fan_byte = bytes_data[2]
+
+        # Power detection
+        if power_byte == "00":
+            command_info["power"] = "OFF"
+        else:
+            command_info["power"] = "ON"
+
+        # Mode detection (based on observed patterns)
+        modes = {
+            "00": "Cool",
+            "01": "Dry",
+            "02": "Auto",
+            "03": "Fan",
+        }
+
+        if mode_byte in modes:
+            command_info["mode"] = modes[mode_byte]
+        else:
+            command_info["mode"] = f"Unknown ({mode_byte})"
+
+        # Fan speed detection
+        fan_speeds = {
+            "00": "Auto",
+            "01": "High",
+            "02": "Medium",
+            "03": "Low"
+        }
+
+        if fan_byte in fan_speeds:
+            command_info["fan_speed"] = fan_speeds[fan_byte]
+        else:
+            command_info["fan_speed"] = f"Unknown ({fan_byte})"
+
+        # Temperature (this is an educated guess based on common AC protocols)
+        # Often temperature is encoded as actual temp - offset (e.g., temp - 16)
+        temp_val = int(temp_byte, 16)
+        if 0 <= temp_val <= 16:
+            command_info["temperature"] = f"{temp_val + 16}°C"
+        else:
+            command_info["temperature"] = f"Raw: {temp_byte}"
+
+    return command_info
+
 def main():
     # Read from stdin if no arguments provided
     if sys.stdin.isatty():
@@ -263,11 +444,23 @@ def main():
     # Analyze the pronto codes
     analysis = analyze_pronto_codes(pronto_codes)
 
+    # Try to detect specific IR protocol
+    protocol_name, protocol_info = detect_ir_protocol(analysis)
+
     # Print basic analysis
     print(f"Protocol: {analysis['protocol']} ({analysis['protocol_desc']})")
     print(f"Frequency: {analysis['frequency_hz']:.1f} Hz")
     print(f"Start sequence length: {analysis['seq1_len']} pairs")
     print(f"Repeat sequence length: {analysis['seq2_len']} pairs")
+
+    # Print detected protocol info
+    if protocol_name != "Generic":
+        print(f"\nDetected specific protocol: {protocol_name}")
+        for key, value in protocol_info.items():
+            if isinstance(value, float):
+                print(f"  {key}: {value:.1f}µs")
+            else:
+                print(f"  {key}: {value}")
 
     # Add sequence validation info
     if 'sequence_valid' in analysis:
@@ -285,21 +478,51 @@ def main():
     print(f"ON pulses - Min: {min(on_times):.1f}µs, Max: {max(on_times):.1f}µs, Avg: {sum(on_times)/len(on_times):.1f}µs")
     print(f"OFF pulses - Min: {min(off_times):.1f}µs, Max: {max(off_times):.1f}µs, Avg: {sum(off_times)/len(off_times):.1f}µs")
 
-    # Attempt to decode to binary
-    binary = decode_to_binary(analysis)
-    if binary["binary"]:
-        print("\nBinary representation (simplified):")
-        binary_str = ''.join(map(str, binary["binary"]))
-        # Print in groups of 8 for readability
-        for i in range(0, len(binary_str), 8):
-            print(binary_str[i:i+8], end=' ')
-        print()
+    # If Stiebel Eltron protocol detected, use specialized decoder
+    if protocol_name == "Stiebel Eltron ACP 35":
+        stiebel_data = decode_stiebel_eltron(analysis)
+        print("\nStiebel Eltron ACP 35 protocol decoding:")
 
-        print("\nBytes (MSB first interpretation):")
-        print(' '.join(binary["bytes_msb"]))
+        if "error" in stiebel_data:
+            print(f"Error: {stiebel_data['error']}")
+        else:
+            binary_str = ''.join(map(str, stiebel_data["binary"]))
+            # Print in groups of 8 for readability
+            print("\nBinary data:")
+            for i in range(0, len(binary_str), 8):
+                print(binary_str[i:i+8], end=' ')
+            print()
 
-        print("\nBytes (LSB first interpretation):")
-        print(' '.join(binary["bytes_lsb"]))
+            print("\nBytes (MSB first):")
+            print(' '.join(stiebel_data["bytes_msb"]))
+
+            print("\nCommand analysis:")
+            for key, value in stiebel_data["command_analysis"].items():
+                print(f"  {key}: {value}")
+
+            print("\nCommand summary:")
+            if "power" in stiebel_data["command_analysis"]:
+                power = stiebel_data["command_analysis"]["power"]
+                mode = stiebel_data["command_analysis"].get("mode", "Unknown")
+                temp = stiebel_data["command_analysis"].get("temperature", "Unknown")
+                fan = stiebel_data["command_analysis"].get("fan_speed", "Unknown")
+                print(f"  Power: {power}, Mode: {mode}, Temp: {temp}, Fan: {fan}")
+    else:
+        # Fall back to generic decoder
+        binary = decode_to_binary(analysis)
+        if binary["binary"]:
+            print("\nBinary representation (simplified):")
+            binary_str = ''.join(map(str, binary["binary"]))
+            # Print in groups of 8 for readability
+            for i in range(0, len(binary_str), 8):
+                print(binary_str[i:i+8], end=' ')
+            print()
+
+            print("\nBytes (MSB first interpretation):")
+            print(' '.join(binary["bytes_msb"]))
+
+            print("\nBytes (LSB first interpretation):")
+            print(' '.join(binary["bytes_lsb"]))
 
     # Visualize the signal
     viz = visualize_signal(analysis)
