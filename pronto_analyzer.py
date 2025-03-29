@@ -5,20 +5,21 @@ import sys
 
 def ensure_dependencies():
     """Check for required packages and install if missing, but ask user first."""
-    required_packages = ['numpy', 'matplotlib']
+    required_packages = ['numpy', 'matplotlib', 'scikit-learn']
     missing_packages = []
 
     # Check which packages are missing
     for package in required_packages:
         try:
-            __import__(package)
+            if package == 'scikit-learn':
+                __import__('sklearn')
+            else:
+                __import__(package)
         except ImportError:
             missing_packages.append(package)
 
     # Install missing packages if user agrees
     if missing_packages:
-        import sys
-
         print(f"Missing dependencies: {', '.join(missing_packages)}")
         response = input("Do you want to install these packages now? (y/n): ").strip().lower()
 
@@ -28,6 +29,10 @@ def ensure_dependencies():
                 print(f"Installing: {' '.join(missing_packages)}")
                 subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
                 print("All dependencies installed successfully!")
+
+                # Important: Notify user about restarting the script
+                print("Please restart the script for the changes to take effect.")
+                sys.exit(0)
             except subprocess.CalledProcessError:
                 print("Failed to install dependencies. Please install them manually:")
                 print(f"pip install {' '.join(missing_packages)}")
@@ -43,6 +48,7 @@ ensure_dependencies()
 # Now safe to import these
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
 
 def parse_pronto_log(log_lines):
     """Extract Pronto codes from log lines and return as a single list."""
@@ -80,6 +86,12 @@ def analyze_pronto_codes(pronto_codes):
     seq1_len = int(pronto_codes[2], 16)
     seq2_len = int(pronto_codes[3], 16)
 
+    # Calculate expected length and validate
+    expected_length = 4 + seq1_len * 2 + seq2_len * 2  # Header (4) + seq1 pairs + seq2 pairs
+    actual_length = len(pronto_codes)
+
+    sequence_valid = actual_length == expected_length
+
     # Extract the timing data
     timing_data = [int(code, 16) for code in pronto_codes[4:]]
 
@@ -98,54 +110,102 @@ def analyze_pronto_codes(pronto_codes):
         "timing_data": timing_data,
         "timings_us": timings_us,
         "period_us": period_us,
-        "raw_codes": pronto_codes
+        "raw_codes": pronto_codes,
+        "sequence_valid": sequence_valid,
+        "expected_length": expected_length,
+        "actual_length": actual_length
     }
 
     return analysis
 
-def decode_to_binary(analysis):
+def decode_to_binary(analysis, lsb_first=False):
     """
     Attempt to decode the timing data to binary.
-    This is a simplified approach - actual decoding depends on the specific protocol.
+    Most IR protocols encode data as pairs of on/off pulses with varying durations.
+
+    Parameters:
+    - analysis: The analysis dictionary from analyze_pronto_codes
+    - lsb_first: If True, interpret bits as LSB first instead of MSB first
     """
     timings = analysis["timings_us"]
 
-    # Find typical on/off times by clustering
-    on_times = [timings[i] for i in range(0, len(timings), 2)]
-    off_times = [timings[i] for i in range(1, len(timings), 2)]
+    # Skip the first few pairs which are typically header/leader pulses
+    # For many protocols, data starts after the header (often 4-6 pairs)
+    start_idx = 8  # Skip first 4 pairs (8 values) as they're likely header pulses
 
-    # Simple approach: find the average short and long pulses
-    on_times_sorted = sorted(on_times)
-    off_times_sorted = sorted(off_times)
+    # Extract pairs of on/off pulses
+    pairs = []
+    for i in range(start_idx, len(timings) - 1, 2):
+        if i + 1 < len(timings):
+            pairs.append((timings[i], timings[i + 1]))
 
-    # If there are enough samples, try to determine short vs long pulses
-    binary_signal = []
+    if len(pairs) < 8:  # Need enough data to detect patterns
+        return {"binary": [], "bytes": []}
 
-    if len(off_times) > 10:
-        # Separate short and long off-times
-        # This is a simple approach - a better one would use clustering
-        threshold = np.median(off_times_sorted) * 1.5
+    # Analyze the distribution of pulse pairs to find patterns
+    # Calculate total duration of each pair (on + off time)
+    pair_durations = [on + off for on, off in pairs]
 
-        for i in range(0, len(timings) - 1, 2):
-            if i+1 < len(timings):
-                if timings[i+1] > threshold:
-                    binary_signal.append(1)  # long off-time = 1
-                else:
-                    binary_signal.append(0)  # short off-time = 0
+    # Identify short and long pulses using clustering
+    # Sort durations and find the midpoint between clusters
+    sorted_durations = sorted(pair_durations)
+
+    # Use the median as a starting point
+    median_idx = len(sorted_durations) // 2
+    median_value = sorted_durations[median_idx]
+
+    # Find the largest gap in the sorted durations around the median
+    max_gap = 0
+    threshold = median_value
+
+    for i in range(1, len(sorted_durations)):
+        gap = sorted_durations[i] - sorted_durations[i-1]
+        if gap > max_gap:
+            max_gap = gap
+            threshold = (sorted_durations[i] + sorted_durations[i-1]) / 2
+
+    # Alternative approach: use K-means for 2 clusters
+    try:
+        # Reshape for KMeans
+        X = np.array(pair_durations).reshape(-1, 1)
+        kmeans = KMeans(n_clusters=2, random_state=0).fit(X)
+        centers = kmeans.cluster_centers_.flatten()
+        labels = kmeans.labels_
+
+        # Map to binary: shorter durations = 0, longer durations = 1
+        if centers[0] < centers[1]:
+            binary_signal = [1 if label == 1 else 0 for label in labels]
+        else:
+            binary_signal = [1 if label == 0 else 0 for label in labels]
+    except:
+        # Fallback to threshold-based approach if K-means fails
+        binary_signal = [1 if duration > threshold else 0 for duration in pair_durations]
 
     # Group bits into bytes for easier reading
-    bytes_data = []
+    bytes_data_msb = []
+    bytes_data_lsb = []
+
     for i in range(0, len(binary_signal), 8):
         if i + 8 <= len(binary_signal):
             byte = binary_signal[i:i+8]
-            byte_val = 0
+
+            # MSB first (left to right)
+            byte_val_msb = 0
             for bit in byte:
-                byte_val = (byte_val << 1) | bit
-            bytes_data.append(f"{byte_val:02X}")
+                byte_val_msb = (byte_val_msb << 1) | bit
+            bytes_data_msb.append(f"{byte_val_msb:02X}")
+
+            # LSB first (right to left)
+            byte_val_lsb = 0
+            for bit_idx in range(7, -1, -1):
+                byte_val_lsb = (byte_val_lsb << 1) | byte[bit_idx]
+            bytes_data_lsb.append(f"{byte_val_lsb:02X}")
 
     return {
         "binary": binary_signal,
-        "bytes": bytes_data
+        "bytes_msb": bytes_data_msb,
+        "bytes_lsb": bytes_data_lsb,
+        "bytes": bytes_data_msb if not lsb_first else bytes_data_lsb
     }
 
 def visualize_signal(analysis):
@@ -183,9 +243,6 @@ def visualize_signal(analysis):
     }
 
 def main():
-    # Ensure all dependencies are installed
-    ensure_dependencies()
-
     # Read from stdin if no arguments provided
     if sys.stdin.isatty():
         print("Please pipe IR log data to this script or provide a filename as argument.")
@@ -212,6 +269,14 @@ def main():
     print(f"Start sequence length: {analysis['seq1_len']} pairs")
     print(f"Repeat sequence length: {analysis['seq2_len']} pairs")
 
+    # Add sequence validation info
+    if 'sequence_valid' in analysis:
+        if analysis['sequence_valid']:
+            print(f"Sequence length validation: PASSED ({analysis['actual_length']} codes)")
+        else:
+            print(f"Sequence length validation: FAILED")
+            print(f"  Expected {analysis['expected_length']} codes, got {analysis['actual_length']} codes")
+
     # Detailed timing analysis
     print("\nTiming analysis:")
     on_times = [analysis["timings_us"][i] for i in range(0, len(analysis["timings_us"]), 2)]
@@ -230,8 +295,11 @@ def main():
             print(binary_str[i:i+8], end=' ')
         print()
 
-        print("\nPossible bytes (simplified interpretation):")
-        print(' '.join(binary["bytes"]))
+        print("\nBytes (MSB first interpretation):")
+        print(' '.join(binary["bytes_msb"]))
+
+        print("\nBytes (LSB first interpretation):")
+        print(' '.join(binary["bytes_lsb"]))
 
     # Visualize the signal
     viz = visualize_signal(analysis)
