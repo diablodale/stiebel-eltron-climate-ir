@@ -18,10 +18,10 @@ Controlling a climate device using a method not approved or supported by the man
 may void its warranty, interfere with normal operation and communication, decreased
 performance, cause damage to the device, cause property or bodily harm, or even cause death.
 
-The author(s) of this guide (including, but not limited to, its methodology, content, and code)
+The author(s) of this project (including, but not limited to, its methodology, content, and code)
 are not responsible for any damage or injury caused. USE AT YOUR OWN RISK!
 
-This guide is not intended to be used as a substitute for professional advice or guidance.
+This project is not intended to be used as a substitute for professional advice or guidance.
 Always consult a qualified technician or the manufacturer before attempting to control, modify,
 or repair any device.
 
@@ -32,11 +32,11 @@ or repair any device.
 * [Connected the KC868-AG to ESPHome](https://devices.esphome.io/devices/KinCony-KC868-AG)
 * VS Code and Copilot for VSCode for editing and assistance
 * Custom Python scripts to analyze and decode the IR signals captured by ESPHome
-* Stiebel Eltron ACP 35 having
-  [info](https://www.stiebel-eltron.de/content/dam/ste/de/de/home/produkte/klima/ACP35_Produktinformation.pdf) and
+* Stiebel Eltron ACP 35 air conditioner —
+  [info](https://www.stiebel-eltron.de/content/dam/ste/de/de/home/produkte/klima/ACP35_Produktinformation.pdf),
   [manual](https://www.stiebel-eltron.de/static/ste/docportal/manual/DM0000040581-fbg.pdf)
 
-## Initial tests
+## IR signal basics
 
 The ACP 35 IR remote control sampled was the manufacturer's remote control.
 Inside the battery compartment is a sticker `TZ20160122`.
@@ -48,44 +48,10 @@ sends the entire state of the air conditioner. This is common for climate device
 e.g. Mitsubishi: <https://esphome.io/components/climate/climate_ir.html#mitsubishi>,
 <https://esphome.io/api/mitsubishi_8cpp_source>
 
-## Pronto raw IR semantics
+### Pronto raw IR semantics
 
 Credit to Bengt Mårtensson <http://www.harctoolbox.org/Glossary.html#ProntoSemantics> for
 documenting the Pronto raw IR semantics. Reproduced with permission below.
-
-An IR signal in Pronto CCF form consists of a number of 4-digit hexadecimal numbers. For example:
-
-```
-0000 006C 0022 0002 015B 00AD 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016
-0016 0016 0016 0016 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041
-0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041
-0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 06FB 015B 0057 0016 0E6C
-```
-
-The first number, here `0000`, denotes the type of the signal. `0000` denotes a raw IR signal with modulation,
-while `0100` denotes a non-modulated raw IR signal. There are also a small number of other allowed values,
-denoting signals in protocol/parameter form, notably `5000` for RC5-protocols, `6000` for RC6-protocols,
-and `900A` for NEC1-protocols.
-
-The second number, here 006C, denotes a frequency code. For the frequency f in Hertz,
-this is the number `1000000 / (f * 0.241246)` expressed as a four-digit hexadecimal number. In the example,
-`006C` corresponds to `1000000 / (0x006c * 0.241246) = 38381 Hertz`.
-(It can be conveniently computed by the Time/Frequency Calculator in
-[IrScrutinizer](https://github.com/bengtmartensson/IrScrutinizer), available under the Tools menu.)
-
-The third and the fourth number denote the number of pairs (= half the number of durations) in the start-
-and the repeat sequence respectively. In the example, there are `0x0022` = 34 starting pairs, and 2 repeat pairs.
-
-Next the start- and the repeat-sequences follow; their length being given by the third and the fourth number,
-as per above. The numbers therein are all time durations, the ones with odd numbers on-periods, the other
-ones off-periods. These are all expressed as multiples of the period time; the inverse value of the frequency
-given as the second number. For this reason, "frequency" must be a non-zero number also for the non-modulated
-case, denoted by the first number being `0100`. In the example, the fifth number `0x015B` denotes
-an on-period of `0x015B * periodtime = 347/f = 347/38381 = 0.009041 seconds = 9.041 microseconds`.
-
-In particular, all sequences start with an on-period and end with an off-period.
-
-In the Pronto representation, there is no way to express an ending sequence.
 
 In general, an IR signal consists of three IR sequences, called
 
@@ -96,10 +62,41 @@ In general, an IR signal consists of three IR sequences, called
 3. Ending sequence, sent exactly once at the end of the transmission of the IR signal,
    "when the button has been released". Only present in a few protocols.
 
-Any of these can be empty, but not both the intro and the repeat. A non-empty ending sequence
+Any sequence can be empty, but not both the start and the repeat. A non-empty ending sequence
 is only meaningful with a non-empty repeat.
 
-## IR signal analysis
+An IR signal in Pronto CCF form consists of a number of 4-digit hexadecimal numbers. For example:
+
+```
+0000 006C 0022 0002 015B 00AD 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 06FB 015B 0057 0016 0E6C
+```
+
+The first number, here `0000`, denotes the type of the signal. `0000` denotes a raw IR signal with modulation,
+while `0100` denotes a non-modulated raw IR signal. There are also a small number of other allowed values,
+denoting signals in protocol/parameter form, notably `5000` for RC5-protocols, `6000` for RC6-protocols,
+and `900A` for NEC1-protocols.
+
+The second number, here `006C`, denotes a frequency code. For the frequency f in Hertz,
+this is the number `1000000 / (f * 0.241246)` expressed as a four-digit hexadecimal number. In the example,
+`006C` corresponds to `1000000 / (0x006c * 0.241246) = 38381 Hertz`.
+(It can be conveniently computed by the Time/Frequency Calculator in
+[IrScrutinizer](https://github.com/bengtmartensson/IrScrutinizer), available under the Tools menu.)
+
+The third `0022` and fourth `0002` numbers denote the number of pairs (= half the number of durations) in the start
+and the repeat sequence respectively. In the example, there are `0x0022` = 34 start pairs and `0x0002` = 2 repeat pairs.
+
+Next the start and repeat sequences follow; their length being given by the third and the fourth numbers,
+as per above. The numbers therein are all time durations, the ones with odd numbers on-periods, the other
+ones off-periods. These are all expressed as multiples of the period time; the inverse value of the frequency
+given as the second number. For this reason, "frequency" must be a non-zero number also for the non-modulated
+case, denoted by the first number being `0100`. In the example, the fifth number `0x015B` denotes
+an on-period of `0x015B * periodtime = 347/f = 347/38381 = 0.009041 seconds = 9041 microseconds`.
+
+In particular, all sequences start with an on-period and end with an off-period.
+
+In the Pronto representation, there is no way to express an ending sequence.
+
+## IR protocol analysis
 
 ### Transmissions
 
@@ -107,7 +104,7 @@ All transmits have the same first 4 words `0000 006D 004A 0000` of Pronto codes.
 
 * raw IR signal with modulation
 * `6d` = 109 therefore `1000000 / (109 * 0.241246)` = `38028.866` = 38029 Hz
-* 74 starting pairs
+* 74 start pairs
 * 0 repeat pairs
 
 Pronto and raw IR codes can vary slightly due to timing and power variance.
@@ -228,6 +225,87 @@ for init in [0x00, 0x01, 0x05, 0x0A, 0x55, 0xAA, 0xFF]:
     for byte in command_bytes:
         checksum = (checksum + byte) & 0xFF
     print(f"Sum with init 0x{init:02X}: 0x{checksum:02X} {'✓' if checksum == expected_checksum else '✗'}")
+```
+
+### Decoding state
+
+A python script `decode.py` was created to decode the IR bitstream into the state of the air conditioner.
+It accepts stdin multiline input and will look for the `pronto_analyzer.py` binary representation
+of 8 groups of 8 bits then 5 bits.
+
+```bash
+echo "Lorem ipsum 10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111" | ./decode.py
+```
+
+```
+Found 1 bit patterns to analyze.
+
+=== Processing Pattern 1 ===
+10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
+
+✅ Checksum Valid
+  Expected: 0x7F, Calculated: 0x7F
+
+=== Command Decoded ===
+Power: ON
+Mode: Cool
+Temperature: 19°C (66°F)
+Temperature Unit: Celsius
+Fan Speed: High
+Timer: Off, 0 hours
+Display: Standard UI
+
+=== Raw Values ===
+Celsius Offset: 3 (Temp: 19°C)
+Fahrenheit Offset: 7 (Temp: 66°F)
+Power Bit: 1
+Mode Bits: 01 (1)
+Fan Speed Bits: 11 (3)
+Temperature Unit Bit: 1
+Timer Active Bit: 0
+Timer Hours: 0
+Timer UI Bit: 0
+
+=== Binary Verification ===
+Celsius: 0011 (offset 3)
+Timer: 0 (Off)
+Bit5: 0
+Power: 1 (ON)
+Zeros1: 0000
+Hours: 00000 (0)
+Zeros2: 000
+Fahrenheit: 00111 (offset 7)
+Zeros3: 0000000000000000
+Zeros4: 00
+Fan: 11 (3)
+Zeros5: 00
+Mode: 01 (1)
+Temp Units: 1 (C)
+Zeros6: 10000
+Timer UI: 0 (Standard UI)
+Bit55: 0
+Checksum: 01111111 (0x7F)
+```
+
+The python scripts can be chained together to analyze pronto codes and decode the state of the air conditioner.
+
+```bash
+echo "0000 006D 004A 0000 00C5 0017 0013 0017 004A..." | ./pronto_analyzer.py | ./decode.py
+```
+
+```
+Found 1 bit patterns to analyze.
+
+=== Processing Pattern 1 ===
+10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
+
+✅ Checksum Valid
+  Expected: 0x7F, Calculated: 0x7F
+
+=== Command Decoded ===
+Power: ON
+Mode: Cool
+...
 ```
 
 ## Transmission captures
