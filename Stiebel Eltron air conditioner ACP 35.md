@@ -1,47 +1,87 @@
-# ESPHome yaml progrmming for Stiebel Eltron air conditioner ACP 35.md
+# Stiebel Eltron ACP 35 air conditioner
 
-Used KC868-AG ir hub to receive ir, and Home Assistant addon ESPHome to decode and dump them
+The goal is to integrate and make compatible the Stiebel Eltron ACP 35
+air conditioner into the Home Assistant and/or ESPHome platform.
+Perhaps via the climate platform
+<https://esphome.io/components/climate/climate_ir.html> or
+<https://github.com/jcwillox/hass-template-climate>.
 
-Eventually, try to use the climate platform
-https://esphome.io/components/climate/climate_ir.html
+A "clean room" black-box approach was used. Open source tools like ESPHome and a generic
+IR receiver were used to decode the IR codes; avoiding proprietary tools or methods.
+Methodologies of IR decoding are well documented and commonplace,
+e.g. <http://www.harctoolbox.org/>, <https://blog.depau.eu/2021/06/12/ir-remote-reveng/>,
+and <https://blog.flipper.net/infrared/>.
 
-or https://github.com/jcwillox/hass-template-climate
+## ⚠️ Warning and Disclaimer ⚠️
 
-## Pronto raw ir code
+Controlling a climate device using a method not approved or supported by the manufacturer
+may void its warranty, interfere with normal operation and communication, decreased
+performance, cause damage to the device, cause property or bodily harm, or even cause death.
 
-ESPHome is only identifying it as pronto codes.
+The author(s) of this guide (including, but not limited to, its methodology, content, and code)
+are not responsible for any damage or injury caused. USE AT YOUR OWN RISK!
 
-Are these discrete button press codes?
-Or is the remote keeping its own state locally, and then
-on each press of a button/sequence it transmits the
-full state of everything. The mitsubishi code
-https://esphome.io/api/mitsubishi_8cpp_source does this.
-https://esphome.io/components/climate/climate_ir.html#mitsubishi
-writes the mitsubishi climate code,
-> This climate IR component is also known to work with some Stiebel Eltron Units.
-> It has been tested with Stiebel Eltron IR-Remote KM07F and unit ACW 25i minisplit.
+This guide is not intended to be used as a substitute for professional advice or guidance.
+Always consult a qualified technician or the manufacturer before attempting to control, modify,
+or repair any device.
 
-### Semantics
+## Equipment
 
-http://www.harctoolbox.org/Glossary.html#ProntoSemantics
+* [KinCony KC868-AG Infrared controller](https://www.kincony.com/kc868-ag-iot-ir-controller.html)
+* Raspberry Pi 4 running Home Assistant and the ESPHome addon
+* [Connected the KC868-AG to ESPHome](https://devices.esphome.io/devices/KinCony-KC868-AG)
+* VS Code and Copilot for VSCode for editing and assistance
+* Custom Python scripts to analyze and decode the IR signals captured by ESPHome
+* Stiebel Eltron ACP 35 having
+  [info](https://www.stiebel-eltron.de/content/dam/ste/de/de/home/produkte/klima/ACP35_Produktinformation.pdf) and
+  [manual](https://www.stiebel-eltron.de/static/ste/docportal/manual/DM0000040581-fbg.pdf)
 
-There are a few very old guides to the Pronto format circulating on the internet.
-These were written in the previous century, as the subject was not very well understood.
-Although likely very valuable at the time they were written, however, now they are unsuitable.
+## Initial tests
+
+The ACP 35 IR remote control sampled was the manufacturer's remote control.
+Inside the battery compartment is a sticker `TZ20160122`.
+
+ESPHome identifies the ACP 35 IR signals with Pronto raw codes.
+
+The ACP 35 does not use discrete IR codes for button presses. Instead, each IR transmission
+sends the entire state of the air conditioner. This is common for climate devices,
+e.g. Mitsubishi: <https://esphome.io/components/climate/climate_ir.html#mitsubishi>,
+<https://esphome.io/api/mitsubishi_8cpp_source>
+
+## Pronto raw IR semantics
+
+Credit to Bengt Mårtensson <http://www.harctoolbox.org/Glossary.html#ProntoSemantics> for
+documenting the Pronto raw IR semantics. Reproduced with permission below.
 
 An IR signal in Pronto CCF form consists of a number of 4-digit hexadecimal numbers. For example:
 
 ```
-0000 006C 0022 0002 015B 00AD 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 06FB 015B 0057 0016 0E6C
+0000 006C 0022 0002 015B 00AD 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016
+0016 0016 0016 0016 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041
+0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041
+0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 06FB 015B 0057 0016 0E6C
 ```
 
-The first number, here 0000, denotes the type of the signal. 0000 denotes a raw IR signal with modulation, while 0100 denotes a non-modulated raw IR signal. There are also a small number of other allowed values, denoting signals in protocol/parameter form, notably 5000 for RC5-protocols, 6000 for RC6-protocols, and 900A for NEC1-protocols.
+The first number, here `0000`, denotes the type of the signal. `0000` denotes a raw IR signal with modulation,
+while `0100` denotes a non-modulated raw IR signal. There are also a small number of other allowed values,
+denoting signals in protocol/parameter form, notably `5000` for RC5-protocols, `6000` for RC6-protocols,
+and `900A` for NEC1-protocols.
 
-The second number, here 006C, denotes a frequency code. For the frequency f in Hertz, this is the number 1000000/(f*0.241246) expressed as a four-digit hexadecimal number. In the example, 006C corresponds to 1000000/(0x006c * 0.241246) = 38381 Hertz. (It can be conveniently computed by the Time/Frequency Calculator in IrScrutinizer, available under the Tools menu.)
+The second number, here 006C, denotes a frequency code. For the frequency f in Hertz,
+this is the number `1000000 / (f * 0.241246)` expressed as a four-digit hexadecimal number. In the example,
+`006C` corresponds to `1000000 / (0x006c * 0.241246) = 38381 Hertz`.
+(It can be conveniently computed by the Time/Frequency Calculator in
+[IrScrutinizer](https://github.com/bengtmartensson/IrScrutinizer), available under the Tools menu.)
 
-The third and the forth number denote the number of pairs (= half the number of durations) in the start- and the repeat sequence respectively. In the example, there are 0x0022 = 34 starting pairs, and 2 repeat pairs.
+The third and the fourth number denote the number of pairs (= half the number of durations) in the start-
+and the repeat sequence respectively. In the example, there are `0x0022` = 34 starting pairs, and 2 repeat pairs.
 
-Next the start- and the repeat-sequences follow; their length being given by the third and the forth number, as per above. The numbers therein are all time durations, the ones with odd numbers on-periods, the other ones off-periods. These are all expressed as multiples of the period time; the inverse value of the frequency given as the second number. For this reason, "frequency" must be a non-zero number also for the non-modulated case, denoted by the first number being 0100. In the example, the fifth number 0x015B denotes an on-period of 0x015B*periodtime = 347/f = 347/38381 = 0.009041 seconds = 9.041 microseconds.
+Next the start- and the repeat-sequences follow; their length being given by the third and the fourth number,
+as per above. The numbers therein are all time durations, the ones with odd numbers on-periods, the other
+ones off-periods. These are all expressed as multiples of the period time; the inverse value of the frequency
+given as the second number. For this reason, "frequency" must be a non-zero number also for the non-modulated
+case, denoted by the first number being `0100`. In the example, the fifth number `0x015B` denotes
+an on-period of `0x015B * periodtime = 347/f = 347/38381 = 0.009041 seconds = 9.041 microseconds`.
 
 In particular, all sequences start with an on-period and end with an off-period.
 
@@ -49,49 +89,85 @@ In the Pronto representation, there is no way to express an ending sequence.
 
 In general, an IR signal consists of three IR sequences, called
 
-1. start sequence (or "intro", or "beginning sequence"), sent exactly once at the beginning of the transmission of the IR signal,
-2. repeat sequence, sent "while the button is held down", i.e. zero or more times during the transmission of the IR signal
-   (although some protocols may require at least one copy to be transmitted),
-3. ending sequence, sent exactly once at the end of the transmission of the IR signal, "when the button has been released".
-   Only present in a few protocols.
+1. Start sequence (or "intro", or "beginning sequence"), sent exactly once at the beginning
+   of the transmission of the IR signal,
+2. Repeat sequence, sent "while the button is held down", i.e. zero or more times during the transmission
+   of the IR signal (although some protocols may require at least one copy to be transmitted),
+3. Ending sequence, sent exactly once at the end of the transmission of the IR signal,
+   "when the button has been released". Only present in a few protocols.
 
-Any of these can be empty, but not both the intro and the repeat. A non-empty ending sequence is only meaningful with a non-empty repeat.
+Any of these can be empty, but not both the intro and the repeat. A non-empty ending sequence
+is only meaningful with a non-empty repeat.
 
-## Received codes
+## IR signal analysis
 
-All transmits have the same first 4, and often same next four after that.
-First four `0000 006D 004A 0000` decoded...
+### Transmissions
+
+All transmits have the same first 4 words `0000 006D 004A 0000` of Pronto codes.
 
 * raw IR signal with modulation
 * `6d` = 109 therefore `1000000 / (109 * 0.241246)` = `38028.866` = 38029 Hz
 * 74 starting pairs
 * 0 repeat pairs
 
-Pronto and Raw can fluctuate a bit, but as long as similar its ok.
+Pronto and raw IR codes can vary slightly due to timing and power variance.
+As long as similar, it's OK.
 
-In all my below samples, I never held down buttons. Therefore, makes sense there are zero repeat pairs.
-However, I then tested pressing up and down and holding. The remote's UI increase/decreased the temp
-but didn't send it until I released the button. And the codes still started with `0000 006D 004A 0000`.
-I suspect it never uses repeats. And likely transmits the final goal temperature instead of multiple
-discrete down temp codes.
+In all the below IR samples, I never held down buttons. Therefore, there would be no repeat pairs.
 
-Values within the IR bitstream are being transmitted MSB (most significant bit) first.
-This document is written with the bitstreams in MSB first order, meaning the bits on the left are earliest in time.
+As an experiment, I tested pressing up/down buttons and holding. The remote's UI increase/decreased
+the temperature but there was no transmission until I released the button. Even then, the transmission
+still started with `0000 006D 004A 0000`.
+
+I believe the ACP 35 infrared protocol never sends repeats. Further supporting the protocol only sends
+the final goal temperature instead of multiple discrete down or up temperature buttonm presses.
+
+With dozens of transmissions analyzed, I believe values within the IR bitstream are transmitted
+MSB (most significant bit) first. This document is written with the bitstreams in MSB first order,
+meaning the MSB bits on the left are earliest in time.
+
+### Pronto code analyzer
+
+ESPHome has built-in IR receiver code which detects IR transmissions and decodes them.
+I used this to capture the IR transmissions when I pressed buttons and retrieved the
+corresponding Pronto codes using the ESPHome log for the KC868-AG Infrared controller.
+
+The following transmission from the IR remote was captured while power was on,
+mode was cool, fan was high, no timer, and up button pressed once to achieve 19c.
 
 ```
-Press timer...
-Up -> 15 hr    10101100 01010000 01111000 10000000 00000000 00000001 00001000 00010001 00001
-                    CCC CT P     HHHHH    FFFFF                    W W  MMU      R XXX XXXXX
-                  celsiust power hours    fahrenheit               fan  m u      c
-                         i                                              o n      h
-                         m                                              d i      o
-                         e                                              e t      r
-                         r                                                s      d
+[21:02:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[21:02:45][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
 ```
+
+A Python script `pronto_analyer.py` was created to analyze the Pronto IR codes for
+frequency, sequence lengths, timing, and bitstream values. The text and image output
+of the script is below.
+
+```
+Protocol: 0000 (Raw IR with modulation)
+Frequency: 38028.9 Hz
+Start sequence length: 74 pairs
+Repeat sequence length: 0 pairs
+Sequence length validation: FAILED
+  Expected 152 codes, got 151 codes
+
+Timing analysis:
+ON pulses - Min: 499.6µs, Max: 10123.9µs, Avg: 1129.7µs
+OFF pulses - Min: 552.2µs, Max: 604.8µs, Avg: 571.3µs
+
+Binary representation (simplified):
+10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
+```
+
+![IR signal by time, strength, and decoded bits](ir_signal_on_cool_high_notimer_19c.png)
 
 ### Encoding bitstream
 
-69 bits are transmitted in the following time sequence
+After dozens of transmissions, I believe the IR protocol is a bitstream
+of 69 bits transmitted in the following time sequence
 
 | sz | name       | description |
 |----|:-----------|:------------|
@@ -113,11 +189,39 @@ Up -> 15 hr    10101100 01010000 01111000 10000000 00000000 00000001 00001000 00
 | 5  | 0          | `00000` |
 | 1  | timer ui   | `0` = display standard ui, `1` = display timer ui |
 | 1  | 0          | `0` |
-| 8  | checksum   | ignore preamble, init with 0x55, sum further all bytes MSB first, truncate to 8 bits |
+| 8  | checksum   | ignore preamble, init with `01010101` 0x55, sum further all bytes MSB first, truncate to 8 bits |
 
-Checksum algorithm: initialize sum with `01010101` 0x55, sum further all bytes, truncate to 8 bits
+Binary representation from `pronto_analyzer.py` aligned with the above table:
+
+```
+10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
+     CCC CT P     HHHHH    FFFFF                    W W  MMU      R XXX XXXXX
+     c    t p     hours    fahrenheit               fan  m u      t checksum
+     e    i o                                            o n      i
+     l    m w                                            d i      m
+     s    e e                                            e t      e
+     i    r r                                              s      r
+     u                                                            u
+     s                                                            i
+```
+
+#### Checksum
+
+A python script `checksum.py` was created to analyze the Pronto IR codes for
+possible checksum algorithms. The script takes the Pronto IR codes and tries
+many different checksum algorithms to find the correct one.
+
+The script identified the checksum algorithm as :
+
+1. Ignore the 5-bit preamble
+2. Group the next 64 bits into 8 bytes MSB first
+3. Initialize a sum value with `0x55` (binary `01010101`)
+4. Continue to sum the first 7 bytes
+5. Truncate the sum to 8 bits
+6. Compare the sum with the last byte (its checksum) of the Pronto IR code
 
 ```python
+# Checksum algorithm: initialize sum with `01010101` 0x55, sum further all bytes, truncate to 8 bits
 # 8. Test different starting values (common in CRCs)
 for init in [0x00, 0x01, 0x05, 0x0A, 0x55, 0xAA, 0xFF]:
     checksum = init
@@ -126,29 +230,9 @@ for init in [0x00, 0x01, 0x05, 0x0A, 0x55, 0xAA, 0xFF]:
     print(f"Sum with init 0x{init:02X}: 0x{checksum:02X} {'✓' if checksum == expected_checksum else '✗'}")
 ```
 
-10001010  0x8a
-00011000  0x18
-00010000  0x10
-00000000  0x00
-00000000  0x00
-00110001  0x31
-00000010  0x02
+## Transmission captures
 
-00111010 0x3a goal
-
-
-10100010
-00000000
-00010100
-00000000
-00000000
-00110001
-11000000
-
-11111100 0xfc goal
-
-
-### power
+### Power
 
 ```
 On      10101011 00010000 00000000 01101000 00000000 00000001 10001100 01000011 11101
@@ -162,7 +246,6 @@ On      10101011 00010000 00000000 01101000 00000000 00000001 10001100 01000011 
 Remote not being used -> On
 
 ```
-[21:45:23][I][remote.pronto:231]: Received Pronto: data=
 [21:45:23][I][remote.pronto:233]: 0000 006D 004A 0000 00C2 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
@@ -172,7 +255,6 @@ Remote not being used -> On
 On -> Off
 
 ```
-[22:19:46][I][remote.pronto:231]: Received Pronto: data=
 [22:19:46][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
 [22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
 [22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
@@ -182,16 +264,15 @@ On -> Off
 Off -> On
 
 ```
-[22:22:02][I][remote.pronto:231]: Received Pronto: data=
 [22:22:02][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 0013 0016 004B 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
 [22:22:02][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181 
 ```
 
-### timer
+### Timer
 
-Remote shows a 2-step sequence where pressing timer button sends the below code and then remote
+Remote UI has a 2-step sequence; pressing timer button sends the below code and then remote
 has a UI that wants a time period. Period is in hours 0-24.
 At any time, pressing timer button cancels the existing/new timer and returns to default UI.
 Otherwise, select the number of hours with up/down and then wait several seconds
@@ -243,6 +324,7 @@ From normal operation cool 75f high fan, press timer (and its waiting on the len
 ```
 
 press timer, up, up, wait
+
 ```
 [01:05:12][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0014 
 [01:05:12][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0015 
@@ -286,29 +368,25 @@ press up 24 times to get 24 hrs, wait
 [01:35:54][I][remote.pronto:233]: 0014 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0181
 ```
 
-### C -> F
+### Celsius or Fahrenheit units
+
+Press C -> F
 
 ```
-[21:48:36][I][remote.pronto:231]: Received Pronto: data=
 [21:48:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 
 [21:48:36][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
 ```
 
-### F -> C
+Press F -> C
 
 ```
-[21:54:24][I][remote.pronto:231]: Received Pronto: data=
 [21:54:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
 [21:54:24][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
 ```
-
-### Temperature
-
-#### Units
 
 ```
 c -> f    10101011 00010000 00000000 01101000 00000000 00000001 10001000 00000111 10101
@@ -317,11 +395,11 @@ f -> c    10101011 00010000 00000000 01101000 00000000 00000001 10001100 0000001
                                 Unit where 0 = fahrenheit, 1 = celsius
 ```
 
-#### Values
+### Temperature values
 
 Celsius temperature can range from 17c to 30c with increments of 1c on remote control.
-Coded and transmitted as 4 bits, with a range of decimal 1-14.
-That value is added to 16c. I never saw 0000 aka 16c.
+It is coded and transmitted as 4 bits, with a range of decimal 1-14.
+That value is added to 16c. I never detected 0000 aka 16c.
 
 ```
 17c    10101000 10010000 00000000 00011000 00000000 00000001 10001110 00000010 11011    62.6f
@@ -343,8 +421,8 @@ That value is added to 16c. I never saw 0000 aka 16c.
 ```
 
 Fahrenheit temperature can range from 62f to 86f with increments of 1f on remote control.
-Coded and transmitted as 5 bits, with a range of decimal 3-?.
-That value is added to 59f. I never saw 00000 - 00010 aka 59-61f.
+It is coded and transmitted as 5 bits, with a range of decimal 3-27.
+That value is added to 59f. I never detected 00000 - 00010 aka 59-61f.
 
 ```
 62f    10101000 10010000 00000000 00011000 00000000 00000001 10001010 00000110 11011    16.7c
@@ -358,7 +436,9 @@ That value is added to 59f. I never saw 00000 - 00010 aka 59-61f.
             Celsius offset        Fahrenheit offset   Unit 0=f, 1=c
 ```
 
-Encoding process
+#### Encoding process
+
+Celsius and Fahrenheit values are both always transmitted.
 
 1. Choose the temperature unit: 0 bit = Fahrenheit, 1 bit = Celsius
 2. Given a unit, choose the temperature value ranging from 17-30c or 62-86f.
@@ -370,24 +450,20 @@ Encoding process
    * Fahrenheit `offset = temperature value - 59`
 5. Convert the offsets to bits, most significant bit first
 
-#### Up in Celsius
+#### Celsius samples
 
 When in cool mode, caused 22c -> 23
 
 ```
-[21:56:57][I][remote.pronto:231]: Received Pronto: data=
 [21:56:57][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004B 0017 004B 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 
 [21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0181 
 ```
 
-#### Down in Celsius
-
 When in cool mode, caused 23c -> 22
 
 ```
-[21:58:24][I][remote.pronto:231]: Received Pronto: data=
 [21:58:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 
 [21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0017 004B 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0017 
@@ -502,7 +578,7 @@ up to 30c
 [21:42:55][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0181 
 ```
 
-#### Down in Farenheit
+#### Farenheit samples
 
 Down to 62f
 
@@ -551,7 +627,7 @@ Jump down to 75f
 
 ### Fan
 
-Remote cycles from high->medium-low fan.
+Remote's fan button cycles from high -> medium -> low.
 I pressed button on remote and received codes below.
 
 ```
@@ -568,7 +644,6 @@ Low      10101011 00010000 00000000 01101000 00000000 00000000 10001100 00000010
 High -> Medium
 
 ```
-[22:17:22][I][remote.pronto:231]: Received Pronto: data=
 [22:17:22][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0014 
 [22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
 [22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0017 
@@ -578,7 +653,6 @@ High -> Medium
 Medium -> Low
 
 ```
-[22:18:07][I][remote.pronto:231]: Received Pronto: data=
 [22:18:07][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 0013 0016 004B 0015 0013 0016 004C 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
@@ -588,7 +662,6 @@ Medium -> Low
 Low -> High
 
 ```
-[22:18:37][I][remote.pronto:231]: Received Pronto: data=
 [22:18:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
 [22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
 [22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
@@ -614,7 +687,6 @@ Cool        10101011 00010000 00000000 01101000 00000000 00000001 10001100 00000
 Cool -> Fan
 
 ```
-[22:28:11][I][remote.pronto:231]: Received Pronto: data=
 [22:28:11][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
@@ -626,7 +698,6 @@ Fan -> Dry
 The fan speed jumped to low
 
 ```
-[22:28:43][I][remote.pronto:231]: Received Pronto: data=
 [22:28:43][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
@@ -638,7 +709,6 @@ Dry -> Auto
 The fan speed jumped to high
 
 ```
-[22:29:36][I][remote.pronto:231]: Received Pronto: data=
 [22:29:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
@@ -648,7 +718,6 @@ The fan speed jumped to high
 Auto -> Cool
 
 ```
-[22:30:37][I][remote.pronto:231]: Received Pronto: data=
 [22:30:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
