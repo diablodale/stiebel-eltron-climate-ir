@@ -1,0 +1,39 @@
+[project]
+name = "stiebel-eltron-acp35-ir"
+version = "0.1.0"
+description = "IR protocol decoder/encoder for the Stiebel Eltron ACP 35 air conditioner, and a Home Assistant integration built on it"
+# infrared-protocols requires >=3.14; home-assistant/core requires >=3.14.2.
+# The system python3 on the dev machine is 3.12, so use `uv python install 3.14`.
+requires-python = ">=3.14"
+dependencies = ["infrared-protocols>=9"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+# Only needed for `pytest -m hardware`: driving Home Assistant over REST and
+# subscribing to the ESPHome device's logs to capture what its receiver saw.
+hardware = ["aioesphomeapi>=41", "httpx>=0.28"]
+
+[tool.uv]
+# Nothing here is installable; this repo is tooling, tests and a custom_component
+# that Home Assistant loads from source.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "hardware: needs the KC868-AG, the ACP 35, or the original remote",
+  "manual: needs a human to press a button or observe the unit",
+]
+# Hardware tests never run by default. Every `manual` test also carries
+# `hardware`, so this single filter excludes both.
+#   uv run pytest                              -> safe, no device touched
+#   uv run pytest -m hardware -s               -> everything, prompts included
+#   uv run pytest -m "hardware and not manual" -> device needed, no human needed
+addopts = "-m 'not hardware'"
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
