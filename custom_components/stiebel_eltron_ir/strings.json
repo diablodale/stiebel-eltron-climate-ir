@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Stiebel Eltron ACP 35",
+        "description": "Choose the infrared emitter to transmit through. A receiver is optional; without one, changes made with the physical remote will not be noticed.",
+        "data": {
+          "emitter": "Infrared emitter",
+          "receiver": "Infrared receiver (optional)",
+          "display_celsius": "Air conditioner displays Celsius",
+          "name": "Name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This infrared emitter is already used by another air conditioner."
+    }
+  },
+  "entity": {
+    "number": {
+      "timer_hours": {
+        "name": "Shutdown timer"
+      }
+    }
+  }
+}

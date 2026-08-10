@@ -1,0 +1,12 @@
+{
+  "domain": "stiebel_eltron_ir",
+  "name": "Stiebel Eltron ACP 35 (IR)",
+  "codeowners": ["@diablodale"],
+  "config_flow": true,
+  "dependencies": ["infrared"],
+  "documentation": "https://github.com/diablodale/stiebel-eltron-climate-ir",
+  "integration_type": "device",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/diablodale/stiebel-eltron-climate-ir/issues",
+  "version": "0.1.0"
+}

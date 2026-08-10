@@ -58,9 +58,43 @@ infrared:
   - platform: fake_ir
 ```
 
+## Integration tests
+
+The tests in `tests/integration/` need ha-core's `hass` fixture and
+`MockConfigEntry`, so they run from **ha-core's** test tree rather than this
+repo's. Three more symlinks wire them in:
+
+```bash
+# The tests themselves, as if they were a core component's suite
+ln -s /workspaces/acp35/tests/integration \
+      ~/src/ha-core/tests/components/stiebel_eltron_ir
+
+# Both custom components, where `enable_custom_integrations` looks for them
+ln -s /workspaces/acp35/custom_components/stiebel_eltron_ir \
+      ~/src/ha-core/tests/testing_config/custom_components/stiebel_eltron_ir
+ln -s /workspaces/acp35/tests/custom_components/fake_ir \
+      ~/src/ha-core/tests/testing_config/custom_components/fake_ir
+```
+
+`tests/integration/conftest.py` puts `tests/testing_config` on `sys.path` so the
+tests import `custom_components.stiebel_eltron_ir` — the *same* module object
+Home Assistant's loader uses. Importing it under any other package name creates a
+second copy of the enums, and identity checks like `mode is Acp35Mode.COOL` then
+fail for no visible reason.
+
+`pyproject.toml` excludes `tests/integration` from this repo's own pytest run,
+since it cannot supply those fixtures.
+
 ## Running
 
 ```bash
+# This repo's tests: protocol, captures, CLI. No Home Assistant, no hardware.
+uv run pytest
+
+# The integration tests, from inside the container
+npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
+  bash -lc 'cd /workspaces/ha-core && python -m pytest tests/components/stiebel_eltron_ir --no-cov -q'
+
 # Home Assistant, reachable at http://localhost:8123 (devcontainer.json forwards 8123)
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   bash -lc 'cd /workspaces/ha-core && exec python -m homeassistant -c config'

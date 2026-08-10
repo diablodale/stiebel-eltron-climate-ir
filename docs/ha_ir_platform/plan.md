@@ -369,16 +369,19 @@ provides `_send_command()` and emitter-availability tracking; set
 - `b7` policy lives in one helper: `Acp35Flag.CELSIUS` (when °C) OR'd with the event bit
   for the field being changed, matching the remote exactly. One-line change to a constant
   `b7` if testing shows the event bits are ignored.
-- **Clamp and round the requested temperature at this boundary** (discovered in Phase 3).
-  `Acp35Command` deliberately *raises* `ValueError` outside 17–30 °C rather than clamping,
-  because a caller asking for 35 °C has a bug and should hear about it. But `min_temp` /
-  `max_temp` only constrain the UI — a `climate.set_temperature` service call can carry
-  any float, including a half-degree. So the setter must round to a whole degree and clamp
-  into range before constructing the command, or a stray service call raises out of a
-  service handler instead of doing the obvious thing. Cover it in `tests/test_climate.py`
-  with 5 °C, 99 °C and 21.5 °C.
-- Same boundary applies to `set_fan_mode` and `set_hvac_mode`: map unknown strings to a
-  sensible default rather than letting `Acp35Fan(...)` / `Acp35Mode(...)` raise.
+- **Round the requested temperature at this boundary** (raised in Phase 3, *narrowed in
+  Phase 4*). `Acp35Command` deliberately raises `ValueError` outside 17–30 °C rather than
+  clamping, because a caller asking for 35 °C has a bug and should hear about it. The
+  Phase 3 worry was that a `climate.set_temperature` service call would carry that
+  straight through to the encoder — **it does not**: Home Assistant's climate component
+  validates against `min_temp`/`max_temp` itself and raises `ServiceValidationError`
+  before the entity is called (`homeassistant/components/climate/__init__.py`). What it
+  does *not* do is round, so a half-degree passes through and must be rounded here.
+  Rounding is half-up, since `round()` would send 20.5 down to 20 but 21.5 up to 22.
+  A clamp stays as belt and braces for the restore path.
+- The same turned out to be true for `set_fan_mode` and `set_hvac_mode`: Home Assistant
+  rejects values outside the advertised `fan_modes` / `hvac_modes` before the entity sees
+  them, so no defensive mapping is needed.
 
 **`number.py`** — one `NumberEntity`, 0–24 h, step 1. `0` means timer off (`b1` bit 3
 clear, `b2` = 0); non-zero arms it. Folds both timer fields into a single control rather
