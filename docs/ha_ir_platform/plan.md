@@ -1,0 +1,445 @@
+# Stiebel Eltron ACP 35 → Home Assistant infrared platform
+
+## Step 0 — Save this plan
+
+First action: save this plan **unchanged** to `docs/ha_ir_platform/plan.md`.
+
+## Context
+
+The ACP 35 is IR-only. Last year the IR protocol was reverse-engineered from 39 Pronto
+captures and documented in [Stiebel Eltron air conditioner ACP 35.md](Stiebel Eltron air conditioner ACP 35.md).
+The goal now is to drive the unit from Home Assistant via the new
+[infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
+(HA 2026.6+), where an emitter integration (ESPHome on the KC868-AG) exposes an
+`InfraredEmitterEntity` and a consumer integration builds commands with
+`infrared_protocols.commands.Command` and sends them via `infrared.async_send_command()`.
+
+Before writing any integration the protocol was re-reviewed — and it was wrong.
+
+Throughout this document, **frame** means one complete IR transmission: header, 72 bits,
+trailer. The remote sends exactly one frame per button press and never repeats.
+
+## The documented 69-bit frame is an artifact; the real frame is 72 bits / 9 bytes
+
+Two bugs in `pronto_analyzer.py` compounded:
+
+1. `decode_to_binary()` paired timings as `(timings[i], timings[i+1])` from a hardcoded
+   `start_idx = 8` and classified each pair by its **sum**. That straddles the mark/space
+   boundary, so it recovers bit values only by luck — it drops leading bits and silently
+   merges a bit wherever two short elements are adjacent. The `10101` "preamble" and the
+   split-nibble field layout are both products of this misalignment.
+2. The `Sequence length validation: FAILED — expected 152, got 151` warning was the real
+   clue and was dismissed. It is not corruption: ESPHome's `ProntoProtocol::decode()`
+   writes `dump_number_((data.size() + 1) / 2)` as the pair count and then dumps **every**
+   element of the raw buffer, so an odd-length buffer rounds the pair count up.
+   `pronto_analyzer.py`'s `expected = 4 + pairs*2` assumption is what's wrong. All 39
+   captures are 151 words = 147 durations = a complete frame.
+
+147 is odd, and the last duration is the receive-idle timeout, which is necessarily a
+space — so buffer index 0 is a **space** and marks sit at the odd indices. That makes this
+ordinary pulse-distance encoding (constant mark; `0`/`1` carried by the space length), and
+the variable elements at indices 2, 4, … 144 give exactly **72 bits** on all 39 captures.
+The frame is byte-aligned:
+
+```text
+55  32  00  07  00  00  31  C0  7F      (power on, cool, high fan, 19 °C / 66 °F)
+b0  b1  b2  b3  b4  b5  b6  b7  ck
+```
+
+| byte | field |
+| ---- | ----- |
+| `b0` | constant `0x55` |
+| `b1` | bits 7-4 = °C − 16 (1..14 → 17..30 °C); bit 3 = timer armed; bit 1 = power on; bits 2,0 = 0 |
+| `b2` | timer hours, plain binary 0..24 |
+| `b3` | °F − 59 (3..27 → 62..86 °F) |
+| `b4` | 0 (never observed non-zero) |
+| `b5` | 0 (never observed non-zero) |
+| `b6` | bits 7-4 = fan (1 = low, 2 = med, 3 = high); bits 3-0 = mode (0 = auto, 1 = cool, 2 = dry, 3 = fan) |
+| `b7` | one state bit + several per-press event bits — see below |
+| `ck` | `sum(b0..b7) & 0xFF` |
+
+**`ck` validates on 39/39 captures.** The doc's "initialise the sum with `0x55`" was just
+the constant byte `b0` being excluded from the sum and re-added as a magic seed.
+
+Both temperature fields are always populated:
+`°F = clamp(round(°C × 9/5 + 32), 62, 86)` and `°C = clamp(round((°F − 32) × 5/9), 17, 30)`.
+The clamp matters — 17 °C ships as 62 °F, not the 63 °F plain rounding gives.
+
+### `b7` — one state bit, the rest are per-press event bits
+
+This is the only byte whose value is not a pure function of the machine's state. The
+proof: with the machine in an identical state (22 °C, cool, high fan, °C display), `b7`
+differs purely by which button produced the frame — `0xC0` after a temperature press,
+`0x80` after a fan or mode press, `0x88` after a power press.
+
+| bit | kind | meaning |
+| --- | ---- | ------- |
+| 7 `0x80` | **state** | display unit: `1` = °C, `0` = °F. Persists across every frame. |
+| 6 `0x40` | **event** | `1` only in the frame caused by a temperature up/down press; `0` in every other frame. Not set by up/down while in the timer UI, so it tracks the temperature *value* changing, not the button. (n = 17) |
+| 3 `0x08` | **event** | `1` only in frames caused by the power button, for both on and off. (n = 3) |
+| 1 `0x02` | **event** | `1` while the remote is in its timer-entry UI. |
+| 0 `0x01` | unknown | set in exactly one capture (`0x03`, first press of a timer cancel). Unexplained. |
+| 5,4,2 | — | never observed set. |
+
+So bits 6, 3 and 1 are never "always 1" or "always 0" — they are `1` in the one frame that
+button produces and `0` everywhere else. Their *purpose* is untested; most likely they
+tell the indoor unit which field changed so it can flash the right segment on its display.
+
+**Open question, deferred to testing:** does the unit require them, or does it act on
+`b1`/`b2`/`b3`/`b6` regardless? Until that is answered the encoder reproduces the remote's
+behaviour byte-for-byte, which the captures fully specify.
+
+## Physical layer
+
+Pulse-distance, MSB first, `b0` first, no repeat sequence, 74 pairs = header + 72 bit
+pairs + trailer.
+
+**Carrier: use 38000 Hz.** The captures contain *no* frequency information —
+`ProntoProtocol::decode()` hardcodes `uint16_t frequency = 38000U`, so the `006D` in every
+capture is just `REFERENCE_FREQUENCY / 38000` written back out. The "38028.9 Hz" in the
+current doc is that constant round-tripped through 4-digit hex, not a measurement. Keep it
+a named module constant so it is trivially tunable if the unit turns out to be fussy.
+
+Timings below are averaged over all 39 captures using ESPHome's actual integer timebase
+(`to_timebase_(38000) = 1000000 / 38000 = 26 µs`, not 26.296) with the ±20 µs
+`MARK_EXCESS_MICROS` compensation removed (`true_mark = printed + 20`,
+`true_space = printed − 20`):
+
+| element | true µs | spread | n |
+| ------- | ------- | ------ | - |
+| header mark | **unknown — see below** | | |
+| header space | 5100 | 5024–5102 | 39 |
+| bit mark | 576 | 540–644 | 2808 |
+| space = `0` | 481 | 474–500 | 2097 |
+| space = `1` | 1928 | 1904–1956 | 711 |
+| trailer mark | 555 | 540–566 | 39 |
+| trailing gap | not a protocol value | exactly 9990 in all 39 | 39 |
+
+The trailing gap is identical to the bit in every capture because it is ESPHome's default
+`idle: 10ms` receive timeout, not something the remote emits. A real protocol gap would
+jitter. Use ≥ 10 ms between frames and don't treat it as measured.
+
+Bit mark and trailer mark agree within tolerance; use one constant for both.
+
+## The one unknown, and why re-capturing does not fix it
+
+Every capture's buffer *begins* at the header space. The mark that must precede it was
+never recorded — ESPHome's receive buffer starts at the first edge it can measure from, so
+the leading mark is lost before the dumper ever sees it. **A fresh `dump: raw` capture
+would very likely be missing the same element**, which is why re-capturing is not worth
+doing: it would confirm the mark/space assignment that parity already proves, and still
+leave the header mark unknown.
+
+Instead, treat the header mark as the single tunable constant and resolve it during the
+transmit testing that has to happen anyway. `HEADER_MARK` gets an ordered candidate list —
+`5100` (symmetric with the space, the common case), then `4400`, `3000`, `9000`, and `0`
+(no header mark at all) — and the first value the unit responds to wins. That is about
+five button presses in HA developer tools, and unlike a capture it proves what the *unit*
+accepts rather than what the remote emits.
+
+Everything else a re-capture campaign would have chased (`b7` policy, fan-auto, dry/fan
+interaction) also needs the unit to respond, not a capture, so it folds into
+**Verification** below.
+
+## Phase 1 — Rewrite the protocol doc and tooling
+
+**[Stiebel Eltron air conditioner ACP 35.md](Stiebel Eltron air conditioner ACP 35.md)**
+
+- Replace *IR protocol analysis* → *Mode* with the corrected 72-bit / 9-byte spec, the
+  `b7` state-vs-event table, and the physical-layer table above.
+- Correct the carrier claim: 38 kHz assumed, not measured.
+- Keep every raw capture block verbatim — they are the regression fixtures.
+- Add an appendix **"Superseded 69-bit interpretation"** recording the old table, the two
+  analyzer bugs, and the `(data.size() + 1) / 2` rounding that explains `151 != 152`, so
+  the provenance of the correction is clear.
+- Update *Equipment* to name the HA infrared platform as the target.
+
+**Delete** `pronto_analyzer.py` and `checksum.py` (git history preserves them); their jobs
+are done and their logic is wrong.
+
+**Replace [requirements.txt](requirements.txt) with `pyproject.toml`.** The current file
+exists only to feed `pronto_analyzer.py` (`matplotlib`, `scikit-learn`, and a pinned `pip`),
+so nothing in it survives. `pyproject.toml` then carries dependencies, the pytest markers
+and lint config in one place:
+
+```toml
+[project]
+name = "stiebel-eltron-acp35-ir"
+requires-python = ">=3.14"          # infrared-protocols needs 3.14; ha-core needs 3.14.2
+dependencies = ["infrared-protocols>=9"]
+
+[dependency-groups]
+dev = ["pytest"]
+hardware = ["aioesphomeapi", "httpx"]   # only for `pytest -m hardware`
+
+[tool.pytest.ini_options]
+markers = [
+  "hardware: needs the KC868-AG, the ACP 35, or the original remote",
+  "manual: needs a human to press a button or observe the unit",
+]
+addopts = "-m 'not hardware'"
+```
+
+**Python version is a real constraint, not a formality.** This machine's `python3` is
+**3.12.3**, but `infrared-protocols` 9.0.0 requires `>=3.14` and ha-core requires
+`>=3.14.2`, so the encoder cannot even import under the system interpreter. `uv` is already
+installed at `~/.local/bin/uv`, which solves it without touching the system Python:
+
+```bash
+uv python install 3.14
+uv sync                 # or: uv sync --group hardware
+uv run pytest
+```
+
+`infrared-protocols` itself has zero runtime dependencies, so this stays a light install.
+
+**New `tools/acp35_cli.py`** — one correct tool replacing both scripts:
+
+- `--extract` : pull every Pronto capture block out of the `.md`, decode each to 9 bytes,
+  and write `tests/captures.jsonl` (pronto text, label, bytes, decoded state).
+- default stdin mode: Pronto or raw in → decoded human-readable state out (the useful half
+  of the old [decode.py](decode.py)).
+- Imports the shared encoder/decoder from Phase 3 rather than re-implementing bit slicing.
+
+## Phase 2 — Local HA development environment
+
+Set up a Home Assistant core devcontainer so the integration can be developed and tested
+without touching the real AC. Host is Windows + Docker Desktop + WSL2; follow
+[setup_devcontainer_environment](https://developers.home-assistant.io/docs/setup_devcontainer_environment/).
+
+This repo stays where it is on `C:` and is bind-mounted into the container. Confirmed
+constraints of that choice, to design around rather than rediscover: `/mnt/c` is **9p**
+(`cache=0x5`, `msize=65536`), and **inotify does not fire for Windows-hosted files under
+WSL2**. So: no HA auto-reload on edit, no `pytest-watch`, and slow bulk I/O. Restart HA
+manually after edits, and run pytest explicitly. Only *this repo* pays that cost — ha-core
+itself lives on ext4, where the heavy dependency install and core test runs happen.
+
+1. Node LTS is already installed in WSL via nvm — `/home/dale/.nvm/versions/node/v24.19.0/bin/npx`.
+   One gotcha: nvm is sourced from `~/.bashrc`, so a **non-interactive** shell falls back to
+   the Windows Node at `/mnt/c/Program Files/nodejs/npx`, which would hand Windows paths to
+   a Linux workspace. Any scripted invocation must run under `bash -lic`, or
+   `source ~/.nvm/nvm.sh` first. Verify with `command -v npx` → must not be under `/mnt/c`.
+2. Clone the fork onto ext4 (945 GB free), *not* under `/mnt/c`:
+
+   ```bash
+   git clone https://github.com/diablodale/ha-core.git ~/src/ha-core
+   cd ~/src/ha-core && git remote add upstream https://github.com/home-assistant/core.git
+   ```
+
+3. Bring the container up, bind-mounting this repo:
+
+   ```bash
+   npx --yes @devcontainers/cli up --workspace-folder ~/src/ha-core \
+     --mount type=bind,source=/mnt/c/njs/stiebel-eltron-climate-ir,target=/workspaces/acp35
+   ```
+
+   `up` already runs the container's `postCreateCommand`
+   (`git config --global --add safe.directory … && script/setup`) and `postStartCommand`
+   (`script/bootstrap`), so there is no separate setup step to invoke — just expect the
+   first `up` to take a while. The container forwards `appPort` 8123, so the HA the
+   REST-based tests talk to is `http://localhost:8123`, and its interpreter is
+   `/home/vscode/.local/ha-venv/bin/python`.
+
+   **Smoke-test the mount before going further** — Docker Desktop has to translate the
+   `/mnt/c` path back to a Windows path, and it either works or it doesn't:
+
+   ```bash
+   npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
+     sh -c 'ls /workspaces/acp35 && touch /workspaces/acp35/.mnt-probe'
+   ```
+
+   If the mount fails or is unusably slow, fall back to developing inside
+   `~/src/ha-core/config/custom_components/` and `rsync` back to this repo before
+   committing. Decide this once, up front; don't fight it later.
+
+4. Symlink `config/custom_components/stiebel_eltron_ir` → `/workspaces/acp35/custom_components/stiebel_eltron_ir`
+   so `hass -c config` (the devcontainer's *Run Home Assistant* task) loads the live code.
+5. Confirm the environment: run HA, check the `infrared` integration is present, and run a
+   subset of core's suite (`pytest tests/components/infrared`) to prove the harness works.
+6. **Write a dev-only stub emitter**, `config/custom_components/fake_ir/` — roughly 30
+   lines exposing one `InfraredEmitterEntity` whose `async_send_command()` just logs
+   `command.modulation` and `command.get_raw_timings()` and stashes them for assertions.
+   This is what makes hardware-free testing possible: the entire chain (climate service
+   call → `Acp35Command` → `infrared.async_send_command()` → emitter) runs in the
+   devcontainer and we can assert the exact µs list. It never ships; it lives only in the
+   devcontainer's `config/`.
+
+Three test tiers follow from this:
+
+- **Encoder tests** (Phase 3) are plain `pytest` in this repo with no HA import — they run
+  on the host in seconds via `uv run pytest` on the uv-managed 3.14, since the system
+  Python 3.12 cannot import `infrared-protocols`.
+- **Integration tests** (Phase 4) need HA's fixtures and run inside the devcontainer.
+- **Live-HA smoke tests** drive the real HA UI in the devcontainer against `fake_ir`,
+  proving config flow, entity behaviour and emitted timings without any hardware.
+
+If the integration is ever upstreamed, the fork is already in place to move
+`custom_components/stiebel_eltron_ir` to `homeassistant/components/` and open a core PR.
+
+## Phase 3 — The encoder (`Acp35Command`)
+
+**New `custom_components/stiebel_eltron_ir/acp35.py`** — deliberately free of any
+`homeassistant` import so it can be lifted into
+[home-assistant-libs/infrared-protocols](https://github.com/home-assistant-libs/infrared-protocols)
+as a PR later without rework.
+
+Model it on `infrared_protocols/commands/general_electric.py` (module-level timing
+constants, `get_raw_timings()`, `from_raw_timings()` classmethod, `_is_close` /
+`_decode_bit` helpers) and on `commands/panasonic_ac.py` (full-state AC: an `IntEnum` per
+field, a state byte list, checksum appended last, validation in `__init__`):
+
+```python
+CARRIER_HZ  = 38000    # not measured; ESPHome hardcodes 38 kHz when dumping Pronto
+HEADER_MARK = 5100     # UNVERIFIED. candidates: 5100, 4400, 3000, 9000, 0 (none)
+HEADER_SPACE, BIT_MARK, ZERO_SPACE, ONE_SPACE = 5100, 576, 481, 1928
+
+class Acp35Mode(IntEnum):   AUTO = 0; COOL = 1; DRY = 2; FAN = 3
+class Acp35Fan(IntEnum):    AUTO = 0; LOW = 1; MEDIUM = 2; HIGH = 3   # AUTO unverified
+
+class Acp35Flag(IntFlag):   CELSIUS = 0x80; TEMP_CHANGED = 0x40; POWER_PRESSED = 0x08
+                            TIMER_UI = 0x02
+
+class Acp35Command(Command):          # infrared_protocols.commands.Command
+    def __init__(self, *, power: bool, mode, fan, celsius: int,
+                 timer_hours: int = 0, flags: Acp35Flag = Acp35Flag.CELSIUS,
+                 modulation: int = CARRIER_HZ) -> None: ...
+    def get_raw_timings(self) -> list[int]: ...
+    @classmethod
+    def from_raw_timings(cls, timings: list[int]) -> Self | None: ...
+```
+
+- `__init__` validates 17 ≤ °C ≤ 30 and 0 ≤ timer_hours ≤ 24, derives `b3` from `b1` with
+  the clamped conversion, writes `flags` to `b7` verbatim, appends `ck`.
+- `flags` carries the whole of `b7`, so the caller decides the event-bit policy in one
+  place and it can be reduced to just `CELSIUS` if testing shows the rest are ignored.
+- `repeat_count = 0` — the remote never repeats, confirmed across all 39 captures.
+- `from_raw_timings()` tolerates a missing leading header mark, so it decodes both our own
+  transmissions and ESPHome-captured buffers. It powers Phase 5 and gives a free
+  round-trip test.
+
+**New `tests/test_acp35.py`** — regression over `tests/captures.jsonl`:
+
+- every capture decodes to the expected 9 bytes and its checksum validates;
+- `Acp35Command(**decoded).get_raw_timings()` re-encodes to the same 72 bits;
+- `from_raw_timings(get_raw_timings())` round-trips across a spread of states;
+- boundaries: 17 °C → 62 °F, 30 °C → 86 °F, out-of-range raises `ValueError`.
+
+## Phase 4 — The Home Assistant custom integration
+
+**New `custom_components/stiebel_eltron_ir/`**
+
+| file | contents |
+| ---- | -------- |
+| `manifest.json` | `"domain": "stiebel_eltron_ir"`, `"dependencies": ["infrared"]`, `"config_flow": true`, `"iot_class": "assumed_state"` |
+| `const.py` | domain, config keys, HA↔protocol enum maps |
+| `config_flow.py` | `EntitySelector(domain="infrared")` for the emitter, an **optional** one for the receiver, and a °C/°F display-unit choice |
+| `__init__.py` | config-entry setup, forward to `climate` and `number` |
+| `climate.py` | the climate entity |
+| `number.py` | timer-hours entity |
+| `acp35.py` | Phase 3 encoder |
+| `strings.json`, `translations/en.json` | config-flow text |
+
+**`climate.py`** — `Acp35Climate(InfraredEmitterConsumerEntity, ClimateEntity, RestoreEntity)`.
+`InfraredEmitterConsumerEntity` (from `homeassistant.components.infrared.helpers`) already
+provides `_send_command()` and emitter-availability tracking; set
+`self._infrared_emitter_entity_id` from the config entry.
+
+- `_attr_assumed_state = True`; IR is one-way, so the entity owns the full shadow state
+  (power, mode, fan, °C, timer hours, display unit) and restores it via `RestoreEntity`.
+- Every setter mutates the shadow state, builds one `Acp35Command`, and calls
+  `_send_command()` — the protocol has no incremental commands.
+- `hvac_modes`: `OFF`, `AUTO`, `COOL`, `DRY`, `FAN_ONLY`. `OFF` clears `b1` bit 1 and keeps
+  the last mode in `b6`, exactly as the remote does. No heat — the ACP 35 is cooling-only.
+- `fan_modes`: `LOW`, `MEDIUM`, `HIGH`; `AUTO` added only if testing confirms `b6` high
+  nibble `0`.
+- `min_temp` 17, `max_temp` 30, `target_temperature_step` 1.
+- Supported features: `TARGET_TEMPERATURE | FAN_MODE | TURN_ON | TURN_OFF`.
+- `b7` policy lives in one helper: `Acp35Flag.CELSIUS` (when °C) OR'd with the event bit
+  for the field being changed, matching the remote exactly. One-line change to a constant
+  `b7` if testing shows the event bits are ignored.
+
+**`number.py`** — one `NumberEntity`, 0–24 h, step 1. `0` means timer off (`b1` bit 3
+clear, `b2` = 0); non-zero arms it. Folds both timer fields into a single control rather
+than a switch + number pair.
+
+## Phase 5 — Receiver sync (optional feature)
+
+**This must degrade gracefully.** The receiver entity is optional in the config flow. If
+the ESPHome device exposes no `InfraredReceiverEntity`, or the user leaves the field
+blank, the integration loads and works exactly as in Phase 4 — climate + timer control,
+just without state feedback. No error, no unavailable entity; at most a debug log line.
+Nothing in Phases 3–4 may depend on a receiver existing.
+
+When a receiver *is* configured, `Acp35Climate.async_added_to_hass()` calls
+`infrared.helpers.async_subscribe_receiver(hass, receiver_id, self._handle_signal)` and
+registers the unsubscribe via `self.async_on_remove()`. `_handle_signal` runs
+`Acp35Command.from_raw_timings(signal.timings)`; on a match it updates the shadow state and
+writes it, so using the original remote no longer desyncs HA; on a non-match it returns
+silently. Subscribing directly, rather than also inheriting `InfraredReceiverConsumerEntity`,
+avoids a diamond over `InfraredConsumerEntity`.
+
+## Verification
+
+**Everything is a pytest test**, including the hardware steps. Nothing is a prose checklist
+someone has to remember to perform.
+
+The `hardware` and `manual` markers declared in `pyproject.toml` (Phase 1) are excluded by
+`addopts` default, so a bare `uv run pytest` is always safe and never reaches for a device.
+Every `manual` test also carries `hardware`, so that single filter covers both. Run them
+deliberately: `uv run pytest -m hardware`, or `-m "hardware and not manual"` for the subset
+that needs no human, `-s` for the ones that prompt.
+
+`tests/conftest.py` supplies the fixtures that make hardware tests skip cleanly rather than
+fail: `ha_client` (HA REST session from `HA_URL`/`HA_TOKEN`, `pytest.skip` if unset),
+`esphome_logs` (subscribes via `aioesphomeapi` to capture `remote.pronto` lines,
+`pytest.skip` if unreachable), and `confirm(prompt)` (prints an instruction, reads a y/n
+from stdin, `pytest.skip` if not attached to a tty).
+
+### Always runs — pure Python, no HA, no hardware
+
+| module | asserts |
+| ------ | ------- |
+| `tests/test_protocol.py` | field packing, the clamped °C↔°F conversions, checksum, `from_raw_timings(get_raw_timings())` round-trip, 17 °C → 62 °F and 30 °C → 86 °F boundaries, out-of-range raises `ValueError` |
+| `tests/test_captures.py` | all 39 entries in `captures.jsonl` decode to the expected 9 bytes, checksum-validate, and re-encode to bit-identical timings |
+| `tests/test_cli.py` | `tools/acp35_cli.py` decodes a capture to the documented state, and `--extract` regenerates `captures.jsonl` unchanged |
+
+### Devcontainer — needs HA, no hardware
+
+Guarded by a module-level `pytest.importorskip("homeassistant")` so they simply skip on the
+host instead of erroring.
+
+| module | asserts |
+| ------ | ------- |
+| `tests/test_config_flow.py` | flow completes with and without a receiver selected; a config entry with no receiver loads and works |
+| `tests/test_climate.py` | every service call produces the expected `Acp35Command`; shadow state survives a restart; `OFF` keeps the last mode in `b6` |
+| `tests/test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
+| `tests/test_receive.py` | feeds recorded remote timings straight into `_handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
+
+### `-m hardware` — the four things that genuinely need the device
+
+The KC868-AG lives on the production HA instance. Two ways to bridge that; the first is
+less disruptive and is the recommendation:
+
+- **Recommended: bring the code to the device.** Copy `custom_components/stiebel_eltron_ir`
+  into the production HA config and add the integration there, selecting the existing
+  ESPHome emitter entity. Point `HA_URL`/`HA_TOKEN` at production and run
+  `pytest -m hardware`. Nothing about the device or production HA changes.
+- **Alternative: bring the device to the code.** Remove the ESPHome device from production
+  HA and add it to the devcontainer instance. This works, with one catch: mDNS discovery
+  will not cross Docker Desktop's NAT, so the device must be added **by IP address**
+  manually. Outbound API connections from the container to the LAN are fine. (ESPHome's API
+  does accept multiple simultaneous clients, so both instances *can* connect at once, but
+  that is untested territory — prefer a clean handoff.)
+
+| module | marks | behaviour |
+| ------ | ----- | --------- |
+| `tests/hardware/test_header_mark.py` | `hardware, manual` | Parametrised over `5100, 4400, 3000, 9000, 0`. Sends power-on with each candidate and `confirm("did the unit respond?")`. Exactly one is expected to pass; the winner is written into the doc and `acp35.py`. If all fail, a second parametrisation adds `CARRIER_HZ` as a variable |
+| `tests/hardware/test_loopback.py` | `hardware` | Fully automatic. A session fixture first transmits once and checks `esphome_logs` for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise, for each state it sends the command, decodes the captured Pronto line to 9 bytes, and asserts equality with both the bytes we intended and the bytes the original remote produced for that state (already in the `.md`) |
+| `tests/hardware/test_behaviour.py` | `hardware, manual` | The matrix no capture can answer: power on/off, all four modes, all three fan speeds plus a fan-auto (`b6` = `0x0x`) probe, 17 °C and 30 °C, °F display, a non-low fan in dry mode, timer 1 h / 24 h / cancel, and whether a constant `b7` of just `CELSIUS` is honoured. Each case sends and `confirm`s. Results get folded back into the doc and the encoder |
+| `tests/hardware/test_receiver_sync.py` | `hardware, manual` | Skips unless the ESPHome device exposes a receiver entity. Prompts the operator to press a button on the physical remote, then asserts the HA climate entity followed. A companion case clears the receiver from the config and asserts climate + timer still work |
+
+On the loopback test specifically: the receiver sits centimetres from the emitting LED and
+will likely saturate. A *decode failure* is therefore inconclusive, not a bug — the fixture
+skips rather than fails. Damping the LED with paper or aiming the pair at a wall may help.
+Either way it cannot recover `HEADER_MARK`: the receive buffer drops the leading mark for
+our own transmissions exactly as it did for the remote's.
