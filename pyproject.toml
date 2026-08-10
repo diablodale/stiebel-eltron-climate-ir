@@ -20,6 +20,9 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/custom_components holds Home Assistant components used as test fixtures
+# (fake_ir), not tests. Nothing in there matches test_*.py, but be explicit.
+norecursedirs = ["tests/custom_components"]
 markers = [
   "hardware: needs the KC868-AG, the ACP 35, or the original remote",
   "manual: needs a human to press a button or observe the unit",

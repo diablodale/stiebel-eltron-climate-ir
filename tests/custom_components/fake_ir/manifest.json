@@ -1,0 +1,9 @@
+{
+  "domain": "fake_ir",
+  "name": "Fake IR emitter (dev only)",
+  "codeowners": ["@diablodale"],
+  "dependencies": ["infrared"],
+  "documentation": "https://github.com/diablodale/stiebel-eltron-climate-ir",
+  "iot_class": "local_push",
+  "version": "0.1.0"
+}
