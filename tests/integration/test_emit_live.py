@@ -15,6 +15,9 @@ It cannot validate HEADER_MARK: no capture contains it, so there is nothing to
 compare the first mark against. That is a hardware bisect.
 """
 
+from pathlib import Path
+
+import pytest
 from custom_components.fake_ir import DATA_SENT
 from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
@@ -31,6 +34,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
 
+import custom_components.stiebel_eltron_ir
 from custom_components.stiebel_eltron_ir.acp35 import (
     BIT_MARK,
     CARRIER_HZ,
@@ -149,6 +153,40 @@ class TestRealPlatform:
         assert decoded.mode.name == "DRY"
         assert decoded.power is True
 
+    async def test_emitted_bits_match_what_the_real_remote_sent(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Compare Home Assistant's output with a capture of the actual remote.
+
+        Every other assertion here round-trips through our own decoder, so a
+        mutually consistent error — an inverted bit convention, say — would pass
+        them all. This one takes the bits straight out of a real capture with a
+        local threshold and compares them to the bits Home Assistant emitted for
+        the same machine state. Nothing in acp35.py participates in the
+        comparison.
+
+        Capture "up once to 19c": power on, cool, high fan, 19 °C, and b7 = 0xC0
+        because a temperature press produced it.
+        """
+        capture = _capture_named("up once to 19c")
+        if capture is None:
+            pytest.skip("protocol document not reachable from the container")
+
+        await setup_real_chain(hass)
+        for service, payload in (
+            (SERVICE_SET_HVAC_MODE, {ATTR_HVAC_MODE: HVACMode.COOL}),
+            (SERVICE_SET_FAN_MODE, {"fan_mode": "high"}),
+            (SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: 19}),
+        ):
+            await hass.services.async_call(
+                CLIMATE_DOMAIN,
+                service,
+                {ATTR_ENTITY_ID: CLIMATE_ID, **payload},
+                blocking=True,
+            )
+
+        assert _bits(sent(hass)[-1]["timings"]) == _bits(capture)
+
     async def test_every_frame_carries_a_valid_checksum(
         self, hass: HomeAssistant
     ) -> None:
@@ -166,3 +204,38 @@ class TestRealPlatform:
             state = Acp35Command.from_raw_timings(record["timings"]).to_bytes()
             assert state[0] == 0x55
             assert state[8] == sum(state[:8]) & 0xFF
+
+
+def _bits(timings: list[int]) -> list[int]:
+    """Extract the 72 data bits with a local threshold, not with acp35.py.
+
+    The spaces carry the data. The first is the header space and the 72 after it
+    are the bits, long meaning one. Deliberately naive so it shares no code with
+    the encoder it is checking.
+
+    A captured frame has one further space after those: the receiver's 10 ms idle
+    timeout, which is long enough to read as a `1`. Slicing to exactly 72 drops
+    it, and keeps a capture comparable with something we emitted, which has no
+    trailing gap at all.
+    """
+    spaces = [value for value in timings if value < 0]
+    bits = [1 if -space > 1000 else 0 for space in spaces[1:73]]
+    assert len(bits) == 72, f"expected 72 data bits, found {len(bits)}"
+    return bits
+
+
+def _capture_named(fragment: str) -> list[int] | None:
+    """Return the timings of the capture whose label contains ``fragment``."""
+    import sys
+
+    repo = Path(custom_components.stiebel_eltron_ir.__file__).resolve().parents[2]
+    if not (document := repo / "Stiebel Eltron air conditioner ACP 35.md").is_file():
+        return None
+
+    sys.path.insert(0, str(repo / "tools"))
+    from pronto import find_pronto_captures, parse_pronto
+
+    for label, code in find_pronto_captures(document.read_text(encoding="utf-8")):
+        if fragment in label:
+            return parse_pronto(code)
+    return None

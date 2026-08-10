@@ -425,8 +425,8 @@ from stdin, `pytest.skip` if not attached to a tty).
 | module | asserts |
 | ------ | ------- |
 | `tests/test_protocol.py` | field packing, both °C↔°F lookup tables and the rules that generated them, checksum, `from_raw_timings(get_raw_timings())` round-trip, 17 °C → 62 °F and 30 °C → 86 °F boundaries, out-of-range raises `ValueError` |
-| `tests/test_captures.py` | all 39 entries in `captures.jsonl` decode to the expected 9 bytes, checksum-validate, and re-encode to bit-identical timings |
-| `tests/test_cli.py` | `tools/acp35_cli.py` decodes a capture to the documented state, and `--extract` regenerates `captures.jsonl` unchanged |
+| `tests/test_captures.py` | all 39 captures, **read from the protocol document rather than a generated `captures.jsonl`**, decode to the expected 9 bytes, checksum-validate, re-encode bit-identically, and match expectations written from the document's prose |
+| `tests/test_cli.py` | `tools/acp35_cli.py` decodes an ESPHome log line, a bare Pronto code and raw timings, and `--document` decodes every capture in text, table and bytes form. There is no `--extract`: dropping `captures.jsonl` removed the need |
 
 ### Devcontainer — needs HA, no hardware
 
@@ -436,9 +436,9 @@ host instead of erroring.
 | module | asserts |
 | ------ | ------- |
 | `tests/test_config_flow.py` | flow completes with and without a receiver selected; a config entry with no receiver loads and works |
-| `tests/test_climate.py` | every service call produces the expected `Acp35Command`; shadow state survives a restart; `OFF` keeps the last mode in `b6` |
+| `tests/test_climate.py`, `tests/test_number.py` | every service call produces the expected `Acp35Command`; shadow state survives a restart; `OFF` keeps the last mode in `b6`; the two entities share one state without clobbering each other |
 | `tests/test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
-| `tests/test_receive.py` | feeds recorded remote timings straight into `_handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
+| `tests/test_receiver.py` | feeds recorded remote timings straight into `_handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
 
 ### `-m hardware` — the four things that genuinely need the device
 
