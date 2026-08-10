@@ -489,3 +489,39 @@ the `(v)` provenance markers on `_FAHRENHEIT_TO_CELSIUS` in `acp35.py` and drop 
 
 Worth doing before Phase 4, since the °F path is user-visible whenever the display unit is
 set to Fahrenheit.
+
+### Timer UI recapture — restore observations lost with the old decoder
+
+Discovered in Phase 1b. The original document recorded several timer observations **only**
+as decoded bit strings, with no accompanying Pronto capture. Those strings came out of the
+superseded analyzer, so they carry its misalignment and cannot be converted to correct
+frames. They were dropped rather than reprinted wrongly, which leaves two real gaps:
+
+- **`b7` bit 0 (`0x01`) is unexplained.** It appears in exactly one surviving capture, as
+  part of `0x03` on the first press of a timer cancel. One observation is not enough to
+  say what it means.
+- **How the timer interacts with other buttons is unknown.** One of the lost observations
+  was a fan press while the timer UI was open, which is the only evidence we had about
+  whether `b1` bit 3, `b2` and `b7` bit 1 survive a press that is not a timer press.
+
+Same shape as the temperature sweep: a capture exercise with the original remote, no new
+test code. With the KC868-AG receiving, capture each of these and paste the Pronto lines
+into the *Timer* section of the protocol document:
+
+1. Press timer to open the UI, then press **fan** — does `b7` bit 1 clear, does `b1` bit 3
+   stay armed, does `b2` keep its hours?
+2. Press timer, then **up to 15 h**, then wait for the UI to close on its own. Compare the
+   frame sent on acceptance with the ones sent while the UI was open.
+3. With a timer already running, press timer once to **view the remaining hours**, then let
+   the UI close without cancelling. This is the case the old document flagged with a
+   "?remaining?" and never resolved.
+4. The **cancel pair** again, both frames, at two different hour settings — enough to tell
+   whether `b7` bit 0 tracks the hours, the cancel, or something else.
+5. Press timer while the unit is **powered off**, if the remote allows it.
+
+Then update the `Acp35Flag` docstring in `acp35.py` if bit 0 is explained, and replace the
+"lost with the superseded decoder" note in the protocol document's *Timer* section.
+
+Lower priority than the temperature sweep: the timer is a single `NumberEntity` in
+Phase 4 and its 0–24 h behaviour is already well evidenced. This closes a documentation
+gap and an unexplained bit, not a blocking unknown.

@@ -1,10 +1,12 @@
 # Stiebel Eltron ACP 35 air conditioner
 
-The goal is to integrate and make compatible the Stiebel Eltron ACP 35
-air conditioner into the Home Assistant and/or ESPHome platform.
-Perhaps via the climate platform
-<https://esphome.io/components/climate/climate_ir.html> or
-<https://github.com/jcwillox/hass-template-climate>.
+The goal is to control the Stiebel Eltron ACP 35 air conditioner from Home
+Assistant, over its infrared remote interface, using the
+[infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
+added in Home Assistant 2026.6. An emitter integration — ESPHome on the KC868-AG —
+exposes an `InfraredEmitterEntity`, and a consumer integration builds commands
+with `infrared_protocols.commands.Command` and sends them through it. The
+implementation plan is in [docs/ha_ir_platform/plan.md](docs/ha_ir_platform/plan.md).
 
 A "clean room" black-box approach was used. Open source tools like ESPHome and a generic
 IR receiver were used to decode the IR codes; avoiding proprietary tools or methods.
@@ -30,8 +32,9 @@ or repair any device.
 * [KinCony KC868-AG Infrared controller](https://www.kincony.com/kc868-ag-iot-ir-controller.html)
 * Raspberry Pi 4 running Home Assistant and the ESPHome addon
 * [Connected the KC868-AG to ESPHome](https://devices.esphome.io/devices/KinCony-KC868-AG)
-* VS Code and Copilot for VSCode for editing and assistance
-* Custom Python scripts to analyze and decode the IR signals captured by ESPHome
+* VS Code, with Copilot and Claude Code for editing and assistance
+* Custom Python tooling in this repository to decode the IR signals captured by
+  ESPHome — see [Tooling](#tooling)
 * Stiebel Eltron ACP 35 air conditioner —
   [info](https://www.stiebel-eltron.de/content/dam/ste/de/de/home/produkte/klima/ACP35_Produktinformation.pdf),
   [manual](https://www.stiebel-eltron.de/static/ste/docportal/manual/DM0000040581-fbg.pdf)
@@ -67,7 +70,7 @@ is only meaningful with a non-empty repeat.
 
 An IR signal in Pronto CCF form consists of a number of 4-digit hexadecimal numbers. For example:
 
-```
+```text
 0000 006C 0022 0002 015B 00AD 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 0041 0016 06FB 015B 0057 0016 0E6C
 ```
 
@@ -98,30 +101,40 @@ In the Pronto representation, there is no way to express an ending sequence.
 
 ## IR protocol analysis
 
+> **This section was rewritten in 2026.** The original analysis described a
+> 69-bit frame with a 5-bit `10101` preamble. That frame does not exist; it was an
+> artifact of two bugs in the analysis script. The real frame is 72 bits, nine
+> bytes, byte-aligned. See [Appendix: the superseded 69-bit
+> interpretation](#appendix-the-superseded-69-bit-interpretation) for what went
+> wrong and how it was caught, and why the old reading nevertheless appeared to
+> validate.
+
 ### Transmissions
 
-All transmits have the same first 4 words `0000 006D 004A 0000` of Pronto codes.
+Every transmission begins with the same four Pronto header words,
+`0000 006D 004A 0000`:
 
-* raw IR signal with modulation
-* `6d` = 109 therefore `1000000 / (109 * 0.241246)` = `38028.866` = 38029 Hz
-* 74 start pairs
-* 0 repeat pairs
+* `0000` — raw IR signal with modulation
+* `006D` — frequency code, see below
+* `004A` = 74 pairs in the start sequence
+* `0000` — no repeat sequence
 
-Pronto and raw IR codes can vary slightly due to timing and power variance.
-As long as similar, it's OK.
+**The frequency code carries no information.** ESPHome's
+`ProntoProtocol::decode()` hardcodes `uint16_t frequency = 38000U` and writes
+`REFERENCE_FREQUENCY / 38000` back out, so `006D` appears in every capture from
+every device regardless of the actual carrier. Converting it back gives
+38028.9 Hz, which is that constant round-tripped through a four-digit hex code,
+not a measurement. **Treat the carrier as 38 kHz assumed, not measured.** If the
+unit ever refuses a transmission, the carrier is one of the things to vary.
 
-In all the below IR samples, I never held down buttons. Therefore, there would be no repeat pairs.
+Buttons were never held down during capture, so no repeat sequence was recorded.
+Holding the up/down button does change the remote's own display, but it transmits
+nothing until release, and then sends a single frame carrying the final
+temperature rather than one frame per increment. The protocol appears to have no
+repeat form at all.
 
-As an experiment, I tested pressing up/down buttons and holding. The remote's UI increase/decreased
-the temperature but there was no transmission until I released the button. Even then, the transmission
-still started with `0000 006D 004A 0000`.
-
-I believe the ACP 35 infrared protocol never sends repeats. Further supporting the protocol only sends
-the final goal temperature instead of multiple discrete down or up temperature buttonm presses.
-
-With dozens of transmissions analyzed, I believe values within the IR bitstream are transmitted
-MSB (most significant bit) first. This document is written with the bitstreams in MSB first order,
-meaning the MSB bits on the left are earliest in time.
+Values are transmitted MSB first, and this document writes them MSB first
+throughout: the leftmost bit is the earliest in time.
 
 ### Pronto code analyzer
 
@@ -132,39 +145,709 @@ corresponding Pronto codes using the ESPHome log for the KC868-AG Infrared contr
 The following transmission from the IR remote was captured while power was on,
 mode was cool, fan was high, no timer, and up button pressed once to achieve 19c.
 
-```
+```text
 [21:02:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
 [21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
 [21:02:45][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
 ```
 
-A Python script `pronto_analyer.py` was created to analyze the Pronto IR codes for
-frequency, sequence lengths, timing, and bitstream values. The text and image output
-of the script is below.
+`tools/acp35_cli.py` decodes that capture:
 
-```
-Protocol: 0000 (Raw IR with modulation)
-Frequency: 38028.9 Hz
-Start sequence length: 74 pairs
-Repeat sequence length: 0 pairs
-Sequence length validation: FAILED
-  Expected 152 codes, got 151 codes
-
-Timing analysis:
-ON pulses - Min: 499.6µs, Max: 10123.9µs, Avg: 1129.7µs
-OFF pulses - Min: 552.2µs, Max: 604.8µs, Avg: 571.3µs
-
-Binary representation (simplified):
-10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
+```console
+$ ./tools/acp35_cli.py < capture.txt
+frame 1 (147 timings)
+  bytes       55 32 00 07 00 00 31 C0 7F
+  power       on
+  mode        cool
+  fan         high
+  temperature 19 C / 66 F  (displaying C)
+  timer       off
+  b7          0xC0  [TEMP_CHANGED]
 ```
 
-![IR signal by time, strength, and decoded bits](ir_signal_on_cool_high_notimer_19c.png)
+It accepts an ESPHome log line, a bare Pronto code, or a list of raw signed
+microseconds, and `--document` decodes every capture in this file at once.
 
-### Encoding bitstream
+### Frame structure
 
-After dozens of transmissions, I believe the IR protocol is a bitstream
-of 69 bits transmitted in the following time sequence
+Each capture is 151 Pronto words: four header words and **147 durations**.
+
+That count is odd, and it is not truncation. ESPHome writes the pair count as
+`(data.size() + 1) / 2` and then dumps every element of its receive buffer, so an
+odd-length buffer rounds the declared pair count *up* — which is why 74 pairs are
+declared for 147 durations. Reading the two as inconsistent was the original
+analysis's first mistake.
+
+The odd count is also the key to the encoding. The final duration is the
+receive-idle timeout, which must be a **space**; with 147 durations that forces
+element 0 to be a space too, and the marks to the odd indices. So the marks are
+the constant element and the spaces carry the data:
+
+**Pulse distance, MSB first, byte 0 first, no repeat.**
+
+| element | µs | measured spread | n |
+| ------- | -- | --------------- | - |
+| header mark | *unknown, see below* | | |
+| header space | 5100 | 5024–5102 | 39 |
+| bit mark | 576 | 540–644 | 2808 |
+| space = `0` | 481 | 474–500 | 2097 |
+| space = `1` | 1928 | 1904–1956 | 711 |
+| trailer mark | 555 | 540–566 | 39 |
+
+Figures are averaged over all 39 captures using ESPHome's actual integer timebase
+(`1000000 / 38000 = 26` µs, not 26.296) with its ±20 µs `MARK_EXCESS_MICROS`
+compensation removed: `true_mark = printed + 20`, `true_space = printed − 20`.
+Bit mark and trailer mark agree within tolerance, so one constant serves for both.
+
+The 10.1 ms element that ends every capture is **not** a protocol value. It is
+identical to the microsecond in all 39 captures, because it is ESPHome's default
+`idle: 10ms` receive timeout. A gap the remote actually emitted would jitter like
+everything else does.
+
+#### The one unmeasured value
+
+Every capture's receive buffer *begins* at the header space. The mark that must
+precede it was never recorded — the buffer starts at the first edge it can
+measure from, so the leading mark is gone before the dumper sees it. A fresh
+`dump: raw` capture would very likely lose it the same way.
+
+`HEADER_MARK` in `acp35.py` is therefore a tunable constant, to be bisected
+against the real unit: `5100` (symmetric with the space) first, then `4400`,
+`3000`, `9000`, and `0` for the hypothesis that there is no header mark at all
+and the 5100 µs element is simply the idle gap before the frame.
+
+### Frame contents
+
+Seventy-two bits, nine bytes:
+
+```text
+55  32  00  07  00  00  31  C0  7F      power on, cool, high fan, 19 °C / 66 °F
+b0  b1  b2  b3  b4  b5  b6  b7  ck
+```
+
+| byte | contents |
+| ---- | -------- |
+| `b0` | constant `0x55` |
+| `b1` | bits 7-4 = °C − 16 (`1`..`14` → 17..30 °C) · bit 3 = timer armed · bit 1 = power on · bits 2, 0 always `0` |
+| `b2` | timer hours, plain binary `0`..`24` |
+| `b3` | °F − 59 (`3`..`27` → 62..86 °F) |
+| `b4` | always `0` |
+| `b5` | always `0` |
+| `b6` | bits 7-4 = fan (`1` low, `2` medium, `3` high) · bits 3-0 = mode (`0` auto, `1` cool, `2` dry, `3` fan) |
+| `b7` | flags, see below |
+| `ck` | `sum(b0..b7) & 0xFF` |
+
+The timer-armed bit and the hours count are **independent**. The remote emits
+armed-with-zero-hours while its timer entry UI is open, so the two cannot be
+collapsed into "armed if hours > 0".
+
+Fan `0` and the °C value `16` (a `b1` nibble of `0`) are both representable but
+were never observed; the remote's fan button only cycles high → medium → low, and
+its range starts at 17 °C.
+
+### b7 — one state bit, the rest per-press event bits
+
+`b7` is the only byte that is not a pure function of the unit's state. With the
+machine in an identical state — 22 °C, cool, high fan, °C display — it differs by
+which button produced the frame:
+
+| b7 | produced by |
+| -- | ----------- |
+| `0xC0` | a temperature up/down press |
+| `0x88` | the power button |
+| `0x80` | the fan, mode or unit button |
+| `0x02` | any press while the timer entry UI is open |
+
+| bit | kind | meaning |
+| --- | ---- | ------- |
+| 7 `0x80` | state | display unit: `1` = °C, `0` = °F. The one genuinely persistent bit. |
+| 6 `0x40` | event | set only in the frame a temperature change produced. Not set by up/down inside the timer UI, so it tracks the temperature *value* changing rather than the button. |
+| 3 `0x08` | event | set only in frames from the power button, for both on and off. |
+| 1 `0x02` | event | set while the remote is in its timer entry UI. |
+| 0 `0x01` | unknown | seen once, as part of `0x03` on the first press of a timer cancel. |
+| 5, 4, 2 | — | never observed set. |
+
+Whether the unit *requires* the event bits, or acts on `b1`/`b2`/`b3`/`b6`
+regardless, is untested. Until that is known the encoder reproduces what the
+remote sends, byte for byte.
+
+### Temperature
+
+Both temperature fields are always populated. Whichever unit the user selected is
+authoritative and the other is its paired value — and the two mappings are **not
+inverses of each other**, so neither can be derived from the other by formula:
+
+* **°C → °F** is `round(°C × 9/5 + 32)` at all 14 values **except 17 °C**, which
+  ships as 62 °F where rounding gives 63. The scales' endpoints are pinned to each
+  other: 17 °C / 62 °F are both the remote's minimum, 30 °C / 86 °F both its
+  maximum. It is not `floor()` — that would also change 21, 22, 26 and 27 °C, and
+  the captures show it does not.
+* **°F → °C** is `round((°F − 32) × 5/9)` at all 25 values.
+
+So 17 °C pairs out to 62 °F, while 63 °F pairs back to 17 °C. A clamp is a no-op
+in both directions across the whole valid domain, and no input lands on an exact
+`.5`, so rounding mode never matters.
+
+All 14 °C → °F pairings are confirmed by captures. Only 6 of the 25 °F → °C ones
+are — 62, 63, 64, 72, 75 and 86 °F. The remaining 19 follow the same rounding rule
+and are unverified; sweeping the remote through its full Fahrenheit range would
+settle them.
+
+### Checksum
+
+`ck` is the low byte of the sum of the eight bytes before it:
+
+```python
+checksum = sum(state[:8]) & 0xFF
+```
+
+**This validates on all 39 captures.** The original analysis described it as a sum
+seeded with a magic `0x55`, which is the same arithmetic seen through the
+misaligned frame: what it called a seed is simply `b0`, a constant byte that the
+old reading had pushed outside the message.
+
+### Tooling
+
+`tools/acp35_cli.py` decodes captures; `tools/pronto.py` converts Pronto codes to
+raw signed timings; `custom_components/stiebel_eltron_ir/acp35.py` holds the
+encoder and decoder and has no Home Assistant dependency.
+
+```bash
+./tools/acp35_cli.py < capture.txt          # ESPHome log, Pronto, or raw timings
+./tools/acp35_cli.py --document             # every capture below
+./tools/acp35_cli.py --document --format table
+```
+
+The 39 captures in this document are the test corpus. `tests/conftest.py` parses
+them straight out of this file, so adding a capture here extends the regression
+suite with no code change:
+
+```bash
+uv run pytest        # 433 tests, no hardware touched
+```
+
+The superseded `pronto_analyzer.py`, `checksum.py` and `decode.py` were deleted;
+they are in the git history.
+
+## Transmission captures
+
+### Power
+
+Power is `b1` bit 1. Pressing the power button also sets `b7` bit 3, in both
+directions.
+
+```text
+On    55 62 00 0D 00 00 31 88 7D
+Off   55 60 00 0D 00 00 31 88 7B
+On    55 62 00 0D 00 00 31 88 7D
+         ^^                 ^^
+         |                  b7 bit 3, this frame came from the power button
+         b1 bit 1, 1 = on, 0 = off
+```
+
+Nothing else moves: 22 °C / 72 °F, cool, high fan are unchanged across all three.
+
+Remote not being used -> On
+
+```text
+[21:45:23][I][remote.pronto:233]: 0000 006D 004A 0000 00C2 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[21:45:24][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181 
+```
+
+On -> Off
+
+```text
+[22:19:46][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
+[22:19:46][I][remote.pronto:233]: 004C 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181 
+```
+
+Off -> On
+
+```text
+[22:22:02][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 0013 0016 004B 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[22:22:02][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181 
+```
+
+### Timer
+
+Remote UI has a 2-step sequence; pressing timer button sends the below code and then remote
+has a UI that wants a time period. Period is in hours 0-24.
+At any time, pressing timer button cancels the existing/new timer and returns to default UI.
+Otherwise, select the number of hours with up/down and then wait several seconds
+for the default UI to reappear. The remote UI now has a timer indicator.
+Pressing timer button will show the number of hours ?remaining?. To keep the timer
+active, press nothing. Pressing the timer button again will cancel the timer and return to default UI.
+
+The timer uses two fields that move independently: `b1` bit 3 arms it, `b2` counts
+the hours. `b7` bit 1 marks frames sent while the entry UI is open.
+
+```text
+press timer     55 8A 00 10 00 00 31 02 22   armed, 0 h, timer UI
+up = 1 h        55 8A 01 10 00 00 31 02 23   armed, 1 h
+up = 2 h        55 8A 02 10 00 00 31 02 24   armed, 2 h
+up = 24 h       55 8A 18 10 00 00 31 02 3A   armed, 24 h  (0x18 = 24)
+press timer     55 8A 18 10 00 00 31 03 3B   ...then immediately...
+press timer     55 82 00 10 00 00 31 00 18   disarmed, hours cleared, default UI
+                   ^^ ^^                ^^
+                   |  |                 b7: bit 1 = timer UI, bit 0 unexplained
+                   |  b2 = hours, plain binary
+                   b1 bit 3 = armed  (0x8A = armed + on, 0x82 = on only)
+```
+
+Note the first frame: **armed with zero hours**. Arming and the hour count are
+genuinely separate, so they cannot be collapsed into "armed if hours > 0".
+
+`b7` bit 0 appears exactly once, in `0x03` on the first press of the cancel pair,
+and is unexplained.
+
+The original document also recorded a few timer observations as bit strings with
+no accompanying Pronto capture — a fan press during the timer UI, and a 15 hour
+setting. Those were decoded by the superseded analyzer and cannot be recovered,
+so they are omitted rather than reprinted wrongly. Re-capture them if the timer
+UI's interaction with other buttons matters.
+
+From normal operation cool 75f high fan, press timer (and its waiting on the length in the remote UI)
+
+```text
+[23:43:26][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 
+[23:43:26][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0015 0013 0014 0014 0014 
+[23:43:26][I][remote.pronto:233]: 0014 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0015 0013 0014 0014 0014 0014 0017 
+[23:43:26][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0015 0181
+```
+
+press timer, up, up, wait
+
+```text
+[01:05:12][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0014 
+[01:05:12][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0015 
+[01:05:12][I][remote.pronto:233]: 0013 0014 0014 0014 0014 0014 0014 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0014 0014 0017 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0017 004B 0014 0014 0014 0014 0014 0014 0017 
+[01:05:12][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0015 0181
+
+[01:05:13][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 
+[01:05:13][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:05:13][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0015 0013 0017 004B 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0017 
+[01:05:13][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0181
+
+[01:05:14][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:05:14][I][remote.pronto:233]: 0013 0015 0013 0017 004B 0014 0014 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 
+[01:05:14][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0017 004B 0014 0014 0014 0014 0014 0014 0017 
+[01:05:14][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0181
+```
+
+power off, power on, (it is at cool 75f max fan), press timer
+press up 24 times to get 24 hrs, wait
+
+24th...
+
+```text
+[01:26:03][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0015 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[01:26:03][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:26:03][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 
+[01:26:03][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0181
+```
+
+...then timer, timer, to cancel the existin 24hr timer
+
+```text
+[01:35:53][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[01:35:53][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:35:53][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 
+[01:35:53][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0015 0013 0017 004B 0017 004B 0014 0181 
+
+[01:35:54][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:35:54][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[01:35:54][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0014 0014 0015 0013 0014 0014 0017 004B 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0014 
+[01:35:54][I][remote.pronto:233]: 0014 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0181
+```
+
+### Celsius or Fahrenheit units
+
+Press C -> F
+
+```text
+[21:48:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 
+[21:48:36][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
+```
+
+Press F -> C
+
+```text
+[21:54:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[21:54:24][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
+```
+
+The unit button moves `b7` bit 7 and nothing else — both temperature fields keep
+their values, because the remote always transmits both.
+
+```text
+C -> F    55 62 00 0D 00 00 31 00 F5
+F -> C    55 62 00 0D 00 00 31 80 75
+             ^^ ^^                ^^
+             |  |                 b7 bit 7: 1 = °C, 0 = °F
+             |  b3 = 0x0D = 72 °F, unchanged
+             b1 high nibble = 6 = 22 °C, unchanged
+```
+
+### Temperature values
+
+Celsius ranges 17–30 °C in 1 °C steps, held in the high nibble of `b1` as
+`°C − 16`, so decimal 1–14. A nibble of `0`, meaning 16 °C, was never observed.
+
+Every value below is a real capture. Note `b3` tracking `b1`, and `b7` = `0xC0`
+throughout — bit 7 for the °C display, bit 6 because a temperature press produced
+the frame.
+
+```text
+        b0 b1 b2 b3 b4 b5 b6 b7 ck      paired
+17 °C   55 12 00 03 00 00 31 C0 5B      62 °F
+18 °C   55 22 00 05 00 00 31 C0 6D      64 °F
+19 °C   55 32 00 07 00 00 31 C0 7F      66 °F
+20 °C   55 42 00 09 00 00 31 C0 91      68 °F
+21 °C   55 52 00 0B 00 00 31 C0 A3      70 °F
+22 °C   55 62 00 0D 00 00 31 C0 B5      72 °F
+23 °C   55 72 00 0E 00 00 31 C0 C6      73 °F
+24 °C   55 82 00 10 00 00 31 C0 D8      75 °F
+25 °C   55 92 00 12 00 00 31 C0 EA      77 °F
+26 °C   55 A2 00 14 00 00 31 C0 FC      79 °F
+27 °C   55 B2 00 16 00 00 31 C0 0E      81 °F
+28 °C   55 C2 00 17 00 00 31 C0 1F      82 °F
+29 °C   55 D2 00 19 00 00 31 C0 31      84 °F
+30 °C   55 E2 00 1B 00 00 31 C0 43      86 °F
+           ^        ^           ^
+           |        |           b7 bit 7 = °C displayed
+           |        b3 = °F − 59
+           b1 high nibble = °C − 16
+```
+
+Fahrenheit ranges 62–86 °F in 1 °F steps, held in `b3` as `°F − 59`, so decimal
+3–27. Values below 62 °F were never observed. Here `b7` = `0x40`: bit 7 clear for
+the °F display, bit 6 still set by the temperature press.
+
+```text
+        b0 b1 b2 b3 b4 b5 b6 b7 ck      paired
+62 °F   55 12 00 03 00 00 31 40 DB      17 °C
+63 °F   55 12 00 04 00 00 31 40 DC      17 °C
+64 °F   55 22 00 05 00 00 31 40 ED      18 °C
+75 °F   55 82 00 10 00 00 31 40 58      24 °C
+86 °F   55 E2 00 1B 00 00 31 40 C3      30 °C
+```
+
+**62 °F and 63 °F both pair with 17 °C, but 17 °C pairs back to 62 °F.** The two
+mappings are not inverses; see [Temperature](#temperature) above. Only these five
+Fahrenheit values plus 72 °F were captured, so 19 of the 25 °F → °C pairings
+remain unverified.
+
+#### Encoding process
+
+Celsius and Fahrenheit values are both always transmitted.
+
+1. Choose the temperature unit: 0 bit = Fahrenheit, 1 bit = Celsius
+2. Given a unit, choose the temperature value ranging from 17-30c or 62-86f.
+3. Convert that value to the other unit
+   * Celsius to Fahrenheit `value = (temperature value * 9/5) + 32` and round to nearest integer
+   * Fahrenheit to Celsius `value = (temperature value - 32) * 5/9` and round to nearest integer
+4. Convert the temperature values to offsets
+   * Celsius `offset = temperature value - 16`
+   * Fahrenheit `offset = temperature value - 59`
+5. Convert the offsets to bits, most significant bit first
+
+#### Celsius samples
+
+When in cool mode, caused 22c -> 23
+
+```text
+[21:56:57][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004B 0017 004B 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 
+[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0181 
+```
+
+When in cool mode, caused 23c -> 22
+
+```text
+[21:58:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 
+[21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0017 004B 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0017 
+[21:58:24][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0014 0014 0017 004B 0014 0181 
+```
+
+When in cool mode, was at 17c, kept pressing down and it kept at 17c
+
+```text
+[20:47:54][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[20:47:54][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[20:47:54][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
+[20:47:54][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181
+```
+
+up once to 18c
+
+```text
+[20:58:43][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[20:58:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[20:58:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[20:58:43][I][remote.pronto:233]: 004B 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181
+```
+
+up once to 19c
+
+```text
+[21:02:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[21:02:45][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
+```
+
+up to 20c
+
+```text
+[21:17:33][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:17:33][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:17:33][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 
+[21:17:33][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0181 
+```
+
+up to 21c
+
+```text
+[21:27:58][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004B 0016 0013 0016 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:27:58][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:27:58][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 
+[21:27:58][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0181 
+```
+
+up to 24c
+
+```text
+[21:30:49][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0015 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:30:49][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:30:49][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 
+[21:30:49][I][remote.pronto:233]: 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0181
+```
+
+up to 25c
+
+```text
+[21:33:33][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 004A 0016 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:33:33][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:33:33][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 
+[21:33:33][I][remote.pronto:233]: 004C 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0181
+```
+
+up to 26c
+
+```text
+[21:36:46][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 004A 0016 0013 0015 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:36:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:36:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 
+[21:36:46][I][remote.pronto:233]: 004C 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0181
+```
+
+up to 27c
+
+```text
+[21:38:20][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 004A 0017 004B 0016 0013 0015 0013 0016 004B 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0181
+```
+
+up to 28c
+
+```text
+[21:39:47][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:39:47][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:39:47][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:39:47][I][remote.pronto:233]: 0013 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
+```
+
+up to 29c
+
+```text
+[21:41:25][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:41:25][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[21:41:25][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 
+[21:41:25][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0181
+```
+
+up to 30c
+
+```text
+[21:42:55][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0014 
+[21:42:55][I][remote.pronto:233]: 0014 0015 0013 0014 0014 0015 0013 0015 0013 0014 0014 0015 0013 0017 004B 0017 004B 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0015 
+[21:42:55][I][remote.pronto:233]: 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0017 004B 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
+[21:42:55][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0181 
+```
+
+#### Farenheit samples
+
+Down to 62f
+
+```text
+[21:57:50][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:57:50][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[21:57:50][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 
+[21:57:50][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181```
+```
+
+Up to 63f
+
+```text
+[22:03:56][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0015 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:03:56][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:03:56][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 
+[22:03:56][I][remote.pronto:233]: 0014 0016 004C 0017 004B 0016 004C 0014 0014 0014 0014 0014 0181 
+```
+
+Up to 64f
+
+```text
+[22:13:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0016 004A 0017 0013 0016 004A 0017 0013 0016 004A 0016 0013 0015 0013 0016 004B 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:13:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:13:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 
+[22:13:45][I][remote.pronto:233]: 004B 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181
+```
+
+Jump up to 86f
+
+```text
+[22:21:00][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0017 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:21:00][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 
+[22:21:00][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0014 0014 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0017 004B 0017 004B 0014 
+[22:21:00][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0014 0181
+```
+
+Jump down to 75f
+
+```text
+[22:26:23][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 
+[22:26:23][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:26:23][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
+[22:26:23][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0181 
+```
+
+### Fan
+
+Remote's fan button cycles from high -> medium -> low.
+I pressed button on remote and received codes below.
+
+Fan speed is the high nibble of `b6`.
+
+```text
+High     55 62 00 0D 00 00 31 80 75
+Medium   55 62 00 0D 00 00 21 80 65
+Low      55 62 00 0D 00 00 11 80 55
+                           ^
+                           3 = high, 2 = medium, 1 = low
+```
+
+`0` is representable but the button never produces it, so a possible "auto" fan
+is untested. The low nibble stays `1` (cool) throughout, and `b7` stays `0x80` —
+a fan press sets no event bit.
+
+High -> Medium
+
+```text
+[22:17:22][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0014 
+[22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0017 
+[22:17:22][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0017 004B 0015 0013 0017 004B 0014 0181
+```
+
+Medium -> Low
+
+```text
+[22:18:07][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 0013 0016 004B 0015 0013 0016 004C 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
+[22:18:07][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181
+```
+
+Low -> High
+
+```text
+[22:18:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
+[22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
+[22:18:37][I][remote.pronto:233]: 004C 0016 004C 0014 0014 0016 004C 0014 0014 0016 004C 0014 0181 
+```
+
+### Mode
+
+Remote started with mode=cool and 22c and high fan
+
+Mode is the low nibble of `b6`, sharing the byte with the fan speed.
+
+```text
+Cool     55 62 00 0D 00 00 31 80 75
+Fan      55 62 00 0D 00 00 33 80 77
+Dry      55 62 00 0D 00 00 12 80 56
+Auto     55 62 00 0D 00 00 30 80 74
+                           ^^
+                           |low nibble: 0 = auto, 1 = cool, 2 = dry, 3 = fan
+                           high nibble = fan speed
+```
+
+**Entering dry mode drops the fan to low** — `b6` goes `0x33` → `0x12`, changing
+both nibbles at once. Leaving dry for auto restores it to high (`0x30`). Whether
+the unit would accept a non-low fan in dry mode, or whether the remote is merely
+being helpful, is untested.
+
+Cool -> Fan
+
+```text
+[22:28:11][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[22:28:11][I][remote.pronto:233]: 004B 0017 004B 0014 0014 0017 004B 0017 004B 0017 004B 0015 0181 
+```
+
+Fan -> Dry
+
+The fan speed jumped to low
+
+```text
+[22:28:43][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
+[22:28:43][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0181 
+```
+
+Dry -> Auto
+
+The fan speed jumped to high
+
+```text
+[22:29:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[22:29:36][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0181 
+```
+
+Auto -> Cool
+
+```text
+[22:30:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
+[22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
+[22:30:37][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181
+```
+
+## Appendix: the superseded 69-bit interpretation
+
+The original 2025 analysis of these same captures described a 69-bit frame with a
+5-bit `10101` preamble and fields straddling byte boundaries:
 
 | sz | name       | description |
 |----|:-----------|:------------|
@@ -188,616 +871,55 @@ of 69 bits transmitted in the following time sequence
 | 1  | 0          | `0` |
 | 8  | checksum   | ignore preamble, init with `01010101` 0x55, sum further all bytes MSB first, truncate to 8 bits |
 
-Binary representation from `pronto_analyzer.py` aligned with the above table:
-
-```
-10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
-     CCC CT P     HHHHH    FFFFF                    W W  MMU      R XXX XXXXX
-     c    t p     hours    fahrenheit               fan  m u      t checksum
-     e    i o                                            o n      i
-     l    m w                                            d i      m
-     s    e e                                            e t      e
-     i    r r                                              s      r
-     u                                                            u
-     s                                                            i
-```
-
-#### Checksum
-
-A python script `checksum.py` was created to analyze the Pronto IR codes for
-possible checksum algorithms. The script takes the Pronto IR codes and tries
-many different checksum algorithms to find the correct one.
-
-The script identified the checksum algorithm as :
-
-1. Ignore the 5-bit preamble
-2. Group the next 64 bits into 8 bytes MSB first
-3. Initialize a sum value with `0x55` (binary `01010101`)
-4. Continue to sum the first 7 bytes
-5. Truncate the sum to 8 bits
-6. Compare the sum with the last byte (its checksum) of the Pronto IR code
-
-```python
-# Checksum algorithm: initialize sum with `01010101` 0x55, sum further all bytes, truncate to 8 bits
-# 8. Test different starting values (common in CRCs)
-for init in [0x00, 0x01, 0x05, 0x0A, 0x55, 0xAA, 0xFF]:
-    checksum = init
-    for byte in command_bytes:
-        checksum = (checksum + byte) & 0xFF
-    print(f"Sum with init 0x{init:02X}: 0x{checksum:02X} {'✓' if checksum == expected_checksum else '✗'}")
-```
-
-### Decoding state
-
-A python script `decode.py` was created to decode the IR bitstream into the state of the air conditioner.
-It accepts stdin multiline input and will look for the `pronto_analyzer.py` binary representation
-of 8 groups of 8 bits then 5 bits.
-
-```bash
-echo "Lorem ipsum 10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111" | ./decode.py
-```
-
-```
-Found 1 bit patterns to analyze.
-
-=== Processing Pattern 1 ===
-10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
-
-✅ Checksum Valid
-  Expected: 0x7F, Calculated: 0x7F
-
-=== Command Decoded ===
-Power: ON
-Mode: Cool
-Temperature: 19°C (66°F)
-Temperature Unit: Celsius
-Fan Speed: High
-Timer: Off, 0 hours
-Display: Standard UI
-
-=== Raw Values ===
-Celsius Offset: 3 (Temp: 19°C)
-Fahrenheit Offset: 7 (Temp: 66°F)
-Power Bit: 1
-Mode Bits: 01 (1)
-Fan Speed Bits: 11 (3)
-Temperature Unit Bit: 1
-Timer Active Bit: 0
-Timer Hours: 0
-Timer UI Bit: 0
-
-=== Binary Verification ===
-Celsius: 0011 (offset 3)
-Timer: 0 (Off)
-Bit5: 0
-Power: 1 (ON)
-Zeros1: 0000
-Hours: 00000 (0)
-Zeros2: 000
-Fahrenheit: 00111 (offset 7)
-Zeros3: 0000000000000000
-Zeros4: 00
-Fan: 11 (3)
-Zeros5: 00
-Mode: 01 (1)
-Temp Units: 1 (C)
-Zeros6: 10000
-Timer UI: 0 (Standard UI)
-Bit55: 0
-Checksum: 01111111 (0x7F)
-```
-
-The python scripts can be chained together to analyze pronto codes and decode the state of the air conditioner.
-
-```bash
-echo "0000 006D 004A 0000 00C5 0017 0013 0017 004A..." | ./pronto_analyzer.py | ./decode.py
-```
-
-```
-Found 1 bit patterns to analyze.
-
-=== Processing Pattern 1 ===
-10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111
-
-✅ Checksum Valid
-  Expected: 0x7F, Calculated: 0x7F
-
-=== Command Decoded ===
-Power: ON
-Mode: Cool
-...
-```
-
-## Transmission captures
-
-### Power
-
-```
-On      10101011 00010000 00000000 01101000 00000000 00000001 10001100 01000011 11101
-Off     10101011 00000000 00000000 01101000 00000000 00000001 10001100 01000011 11011
-On      10101011 00010000 00000000 01101000 00000000 00000001 10001100 01000011 11101
-                    X                                                             XX
-                    0 = off
-                    1 = on
-```
-
-Remote not being used -> On
-
-```
-[21:45:23][I][remote.pronto:233]: 0000 006D 004A 0000 00C2 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:45:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[21:45:24][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181 
-```
-
-On -> Off
-
-```
-[22:19:46][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:19:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
-[22:19:46][I][remote.pronto:233]: 004C 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181 
-```
-
-Off -> On
-
-```
-[22:22:02][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 0013 0016 004B 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:22:02][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[22:22:02][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181 
-```
-
-### Timer
-
-Remote UI has a 2-step sequence; pressing timer button sends the below code and then remote
-has a UI that wants a time period. Period is in hours 0-24.
-At any time, pressing timer button cancels the existing/new timer and returns to default UI.
-Otherwise, select the number of hours with up/down and then wait several seconds
-for the default UI to reappear. The remote UI now has a timer indicator.
-Pressing timer button will show the number of hours ?remaining?. To keep the timer
-active, press nothing. Pressing the timer button again will cancel the timer and return to default UI.
-
-Binary representation (simplified):
-compare 75f    10101100 00010000 00000000 10000000 00000000 00000001 10001010 00000010 11000
-Press timer    10101100 01010000 00000000 10000000 00000000 00000001 10001000 00010001 00010  ...then immediately...
-Press timer    10101100 00010000 00000000 10000000 00000000 00000001 10001000 00000000 11000  result is default UI
-                         ?                                                 ?     ?  XX XX X
-
-Press timer    10101100 01010000 00000000 10000000 00000000 00000001 10001000 00010001 00010
-up = 1hr       10101100 01010000 00001000 10000000 00000000 00000001 10001000 00010001 00011
-up = 2hr       10101100 01010000 00010000 10000000 00000000 00000001 10001000 00010001 00100  ...and wait to accept and return to default UI
-                                    ??                                                   XXX
-
-up = 24hr      10101100 01010000 11000000 10000000 00000000 00000001 10001000 00010001 11010
-                                 ??                                        ?     ?  XX XXXXX
-
-Press timer    10101100 01010000 11000000 10000000 00000000 00000001 10001000 00011001 11011  ...then immediately...
-Press timer    10101100 00010000 00000000 10000000 00000000 00000001 10001000 00000000 11000
-                         ?       ??                                              ??  ?    ??
-
-Press timer    10101100 01010000 00000000 10000000 00000000 00000001 10001000 00010001 00010
-Up = 1 hr      10101100 01010000 00001000 10000000 00000000 00000001 10001000 00010001 00011  ...and wait to accept and return to default UI
-Press fan=med  10101100 01010000 00001000 10000000 00000000 00000001 00001000 00000000 10001
-                         ?           ?                               W           ?   X X  XX
-
-Press timer...
-Up -> 15 hr    10101100 01010000 01111000 10000000 00000000 00000001 00001000 00010001 00001
-                                  ????                                           ?   X X
-
-                    CCC CT P     HHHHH    FFFFF                    W W  MMU      R XXX XXXXX
-                  celsiust power hours    fahrenheit               fan  m u      c
-                         i                                              o n      h
-                         m                                              d i      o
-                         e                                              e t      r
-                         r                                                s      d
-
-From normal operation cool 75f high fan, press timer (and its waiting on the length in the remote UI)
-
-```
-[23:43:26][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 
-[23:43:26][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0015 0013 0014 0014 0014 
-[23:43:26][I][remote.pronto:233]: 0014 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0015 0013 0014 0014 0014 0014 0017 
-[23:43:26][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0015 0181
-```
-
-press timer, up, up, wait
-
-```
-[01:05:12][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0014 
-[01:05:12][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0015 
-[01:05:12][I][remote.pronto:233]: 0013 0014 0014 0014 0014 0014 0014 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0014 0014 0017 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0017 004B 0014 0014 0014 0014 0014 0014 0017 
-[01:05:12][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0015 0181
-
-[01:05:13][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 
-[01:05:13][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:05:13][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0015 0013 0017 004B 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0017 
-[01:05:13][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0181
-
-[01:05:14][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:05:14][I][remote.pronto:233]: 0013 0015 0013 0017 004B 0014 0014 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 
-[01:05:14][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0017 004B 0014 0014 0014 0014 0014 0014 0017 
-[01:05:14][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0181
-```
-
-power off, power on, (it is at cool 75f max fan), press timer
-press up 24 times to get 24 hrs, wait
-
-24th...
-
-```
-[01:26:03][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0015 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[01:26:03][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:26:03][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 
-[01:26:03][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0181
-```
-
-...then timer, timer, to cancel the existin 24hr timer
-
-```
-[01:35:53][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0016 004B 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[01:35:53][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:35:53][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 
-[01:35:53][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0015 0013 0017 004B 0017 004B 0014 0181 
-
-[01:35:54][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:35:54][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[01:35:54][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0014 0014 0015 0013 0014 0014 0017 004B 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0014 
-[01:35:54][I][remote.pronto:233]: 0014 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0181
-```
-
-### Celsius or Fahrenheit units
-
-Press C -> F
-
-```
-[21:48:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0017 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:48:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 
-[21:48:36][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
-```
-
-Press F -> C
-
-```
-[21:54:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:54:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[21:54:24][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181 
-```
-
-```
-c -> f    10101011 00010000 00000000 01101000 00000000 00000001 10001000 00000111 10101
-f -> c    10101011 00010000 00000000 01101000 00000000 00000001 10001100 00000011 10101
-                                                                     X        X
-                                Unit where 0 = fahrenheit, 1 = celsius
-```
-
-### Temperature values
-
-Celsius temperature can range from 17c to 30c with increments of 1c on remote control.
-It is coded and transmitted as 4 bits, with a range of decimal 1-14.
-That value is added to 16c. I never detected 0000 aka 16c.
-
-```
-17c    10101000 10010000 00000000 00011000 00000000 00000001 10001110 00000010 11011    62.6f
-18c    10101001 00010000 00000000 00101000 00000000 00000001 10001110 00000011 01101    64.4f
-19c    10101001 10010000 00000000 00111000 00000000 00000001 10001110 00000011 11111    66.2f
-20c    10101010 00010000 00000000 01001000 00000000 00000001 10001110 00000100 10001    68.0f
-21c    10101010 10010000 00000000 01011000 00000000 00000001 10001110 00000101 00011    69.8f
-22c    10101011 00010000 00000000 01101000 00000000 00000001 10001110 00000101 10101    71.6f
-23c    10101011 10010000 00000000 01110000 00000000 00000001 10001110 00000110 00110    73.4f
-24c    10101100 00010000 00000000 10000000 00000000 00000001 10001110 00000110 11000    75.2f
-25c    10101100 10010000 00000000 10010000 00000000 00000001 10001110 00000111 01010    77.0f
-26c    10101101 00010000 00000000 10100000 00000000 00000001 10001110 00000111 11100    78.8f
-27c    10101101 10010000 00000000 10110000 00000000 00000001 10001110 00000000 01110    80.6f
-28c    10101110 00010000 00000000 10111000 00000000 00000001 10001110 00000000 11111    82.4f
-29c    10101110 10010000 00000000 11001000 00000000 00000001 10001110 00000001 10001    84.2f
-30c    10101111 00010000 00000000 11011000 00000000 00000001 10001110 00000010 00011    86.0f
-            XXX X                 XXXXX                           X        XXX XXXXX
-            Celsius offset        Fahrenheit offset   Unit 0=f, 1=c
-```
-
-Fahrenheit temperature can range from 62f to 86f with increments of 1f on remote control.
-It is coded and transmitted as 5 bits, with a range of decimal 3-27.
-That value is added to 59f. I never detected 00000 - 00010 aka 59-61f.
-
-```
-62f    10101000 10010000 00000000 00011000 00000000 00000001 10001010 00000110 11011    16.7c
-63f    10101000 10010000 00000000 00100000 00000000 00000001 10001010 00000110 11100    17.2c
-64f    10101001 00010000 00000000 00101000 00000000 00000001 10001010 00000111 01101    17.8c
-...
-75f    10101100 00010000 00000000 10000000 00000000 00000001 10001010 00000010 11000    23.9c
-...
-86f    10101111 00010000 00000000 11011000 00000000 00000001 10001010 00000110 00011    30.0c
-            XXX X                 XXXXX                           X        XXX XXXXX
-            Celsius offset        Fahrenheit offset   Unit 0=f, 1=c
-```
-
-#### Encoding process
-
-Celsius and Fahrenheit values are both always transmitted.
-
-1. Choose the temperature unit: 0 bit = Fahrenheit, 1 bit = Celsius
-2. Given a unit, choose the temperature value ranging from 17-30c or 62-86f.
-3. Convert that value to the other unit
-   * Celsius to Fahrenheit `value = (temperature value * 9/5) + 32` and round to nearest integer
-   * Fahrenheit to Celsius `value = (temperature value - 32) * 5/9` and round to nearest integer
-4. Convert the temperature values to offsets
-   * Celsius `offset = temperature value - 16`
-   * Fahrenheit `offset = temperature value - 59`
-5. Convert the offsets to bits, most significant bit first
-
-#### Celsius samples
-
-When in cool mode, caused 22c -> 23
-
-```
-[21:56:57][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004B 0017 004B 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 
-[21:56:57][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0181 
-```
-
-When in cool mode, caused 23c -> 22
-
-```
-[21:58:24][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 
-[21:58:24][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0014 0014 0017 004B 0017 004B 0017 004B 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0017 004B 0014 0014 0017 
-[21:58:24][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0014 0014 0017 004B 0014 0181 
-```
-
-When in cool mode, was at 17c, kept pressing down and it kept at 17c
-
-```
-[20:47:54][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[20:47:54][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[20:47:54][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
-[20:47:54][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181
-```
-
-up once to 18c
-
-```
-[20:58:43][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[20:58:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[20:58:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[20:58:43][I][remote.pronto:233]: 004B 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181
-```
-
-up once to 19c
-
-```
-[21:02:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 004B 0017 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:02:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[21:02:45][I][remote.pronto:233]: 004B 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
-```
-
-up to 20c
-
-```
-[21:17:33][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0016 0013 0016 004B 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:17:33][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:17:33][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 
-[21:17:33][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0181 
-```
-
-up to 21c
-
-```
-[21:27:58][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004B 0016 0013 0016 004B 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:27:58][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:27:58][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 
-[21:27:58][I][remote.pronto:233]: 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0181 
-```
-
-up to 24c
-
-```
-[21:30:49][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0015 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:30:49][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:30:49][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 
-[21:30:49][I][remote.pronto:233]: 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0181
-```
-
-up to 25c
-
-```
-[21:33:33][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 004A 0016 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:33:33][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:33:33][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 
-[21:33:33][I][remote.pronto:233]: 004C 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0181
-```
-
-up to 26c
-
-```
-[21:36:46][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 004A 0016 0013 0015 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:36:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:36:46][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 
-[21:36:46][I][remote.pronto:233]: 004C 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0181
-```
-
-up to 27c
-
-```
-[21:38:20][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 004A 0017 004B 0016 0013 0015 0013 0016 004B 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:38:20][I][remote.pronto:233]: 0014 0014 0014 0016 004C 0016 004C 0016 004C 0014 0014 0014 0181
-```
-
-up to 28c
-
-```
-[21:39:47][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0016 0013 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:39:47][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:39:47][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:39:47][I][remote.pronto:233]: 0013 0017 004B 0017 004B 0017 004B 0017 004B 0017 004B 0015 0181
-```
-
-up to 29c
-
-```
-[21:41:25][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:41:25][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[21:41:25][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 
-[21:41:25][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0181
-```
-
-up to 30c
-
-```
-[21:42:55][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0015 0013 0015 0013 0014 
-[21:42:55][I][remote.pronto:233]: 0014 0015 0013 0014 0014 0015 0013 0015 0013 0014 0014 0015 0013 0017 004B 0017 004B 0014 0014 0017 004B 0017 004B 0015 0013 0014 0014 0015 0013 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0015 
-[21:42:55][I][remote.pronto:233]: 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0017 004B 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
-[21:42:55][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0181 
-```
-
-#### Farenheit samples
-
-Down to 62f
-
-```
-[21:57:50][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0016 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:57:50][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[21:57:50][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 
-[21:57:50][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0016 004C 0016 004C 0014 0181```
-```
-
-Up to 63f
-
-```
-[22:03:56][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 0013 0015 0013 0016 004B 0016 0013 0015 0013 0016 004C 0015 0013 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:03:56][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:03:56][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 
-[22:03:56][I][remote.pronto:233]: 0014 0016 004C 0017 004B 0016 004C 0014 0014 0014 0014 0014 0181 
-```
-
-Up to 64f
-
-```
-[22:13:45][I][remote.pronto:233]: 0000 006D 004A 0000 00C4 0017 0013 0017 004A 0017 0013 0016 004A 0017 0013 0016 004A 0017 0013 0016 004A 0016 0013 0015 0013 0016 004B 0015 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:13:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:13:45][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0017 
-[22:13:45][I][remote.pronto:233]: 004B 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0181
-```
-
-Jump up to 86f
-
-```
-[22:21:00][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0018 004A 0017 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:21:00][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0014 0014 0015 
-[22:21:00][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0014 0014 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0015 0013 0017 004B 0017 004B 0014 
-[22:21:00][I][remote.pronto:233]: 0014 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0014 0181
-```
-
-Jump down to 75f
-
-```
-[22:26:23][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0017 0013 0016 0013 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0014 0014 0014 0014 0014 0014 0014 
-[22:26:23][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:26:23][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0014 
-[22:26:23][I][remote.pronto:233]: 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0181 
-```
-
-### Fan
-
-Remote's fan button cycles from high -> medium -> low.
-I pressed button on remote and received codes below.
-
-```
-High     10101011 00010000 00000000 01101000 00000000 00000001 10001100 00000011 10101
-Medium   10101011 00010000 00000000 01101000 00000000 00000001 00001100 00000011 00101
-Low      10101011 00010000 00000000 01101000 00000000 00000000 10001100 00000010 10101
-
-                                                             X X               X X 
-                                                             1 1 = 3 for high
-                                                             1 0 = 2 for medium
-                                                             0 1 = 1 for low
-```
-
-High -> Medium
-
-```
-[22:17:22][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0014 0014 0014 0014 0015 0013 0014 
-[22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0015 0013 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:17:22][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0014 0014 0014 0014 0014 0014 0014 0014 0017 004B 0017 004B 0014 0014 0014 0014 0015 0013 0014 0014 0015 0013 0014 0014 0015 0013 0015 0013 0017 004B 0017 
-[22:17:22][I][remote.pronto:233]: 004B 0014 0014 0014 0014 0017 004B 0015 0013 0017 004B 0014 0181
-```
-
-Medium -> Low
-
-```
-[22:18:07][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0016 004A 0016 0013 0016 004B 0016 0013 0016 004B 0016 0013 0016 004B 0015 0013 0016 004C 0016 004C 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:18:07][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
-[22:18:07][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181
-```
-
-Low -> High
-
-```
-[22:18:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 
-[22:18:37][I][remote.pronto:233]: 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0016 004C 0016 004C 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0014 0016 004C 0016 
-[22:18:37][I][remote.pronto:233]: 004C 0016 004C 0014 0014 0016 004C 0014 0014 0016 004C 0014 0181 
-```
-
-### Mode
-
-Remote started with mode=cool and 22c and high fan
-
-```
-Fan         10101011 00010000 00000000 01101000 00000000 00000001 10011100 00000011 10111
-Dry         10101011 00010000 00000000 01101000 00000000 00000000 10010100 00000010 10110
-Auto        10101011 00010000 00000000 01101000 00000000 00000001 10000100 00000011 10100
-Cool        10101011 00010000 00000000 01101000 00000000 00000001 10001100 00000011 10101
-                                                                X    XX           X    XX
-                                                                     00 = 0 for auto
-                                                                     01 = 1 for cool
-                                                                !    10 = 2 for dry (notice remote forced fan to low)
-                                                                     11 = 3 for fan
-```
-
-Cool -> Fan
-
-```
-[22:28:11][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:28:11][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0017 004B 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[22:28:11][I][remote.pronto:233]: 004B 0017 004B 0014 0014 0017 004B 0017 004B 0017 004B 0015 0181 
-```
-
-Fan -> Dry
-
-The fan speed jumped to low
-
-```
-[22:28:43][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0018 004A 0016 0013 0015 0013 0015 0013 0016 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:28:43][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 
-[22:28:43][I][remote.pronto:233]: 0013 0017 004B 0015 0013 0017 004B 0017 004B 0015 0013 0015 0181 
-```
-
-Dry -> Auto
-
-The fan speed jumped to high
-
-```
-[22:29:36][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0016 004A 0017 004B 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:29:36][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[22:29:36][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0181 
-```
-
-Auto -> Cool
-
-```
-[22:30:37][I][remote.pronto:233]: 0000 006D 004A 0000 00C5 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 0013 0017 004A 0017 004A 0016 0013 0015 0013 0015 0013 0016 004C 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 
-[22:30:37][I][remote.pronto:233]: 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0017 004B 0017 004B 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0015 0013 0017 004B 0017 
-[22:30:37][I][remote.pronto:233]: 004B 0017 004B 0015 0013 0017 004B 0015 0013 0017 004B 0015 0181
-```
+That frame does not exist. It is kept here because the correction is worth
+recording, and because the old reading was self-consistent enough to look right.
+
+### What went wrong
+
+Two bugs in `pronto_analyzer.py` compounded:
+
+1. **`decode_to_binary()` paired timings across the mark/space boundary.** It
+   started at a hardcoded index and classified each pair by the *sum* of its two
+   durations. Summing works by luck — the long element dominates whichever slot
+   it lands in — so bits came out mostly right while the alignment was wrong. The
+   misalignment dropped the leading bit and silently merged a bit wherever two
+   short elements were adjacent, losing three bits in total. The phantom `10101`
+   preamble and the split-nibble fields are both products of that shift.
+
+2. **The length check was inverted and then ignored.** The script printed
+   `Sequence length validation: FAILED — expected 152 codes, got 151`, and that
+   warning was treated as capture noise. It was the opposite: the captures are
+   complete and the *expectation* was wrong. ESPHome writes the pair count as
+   `(data.size() + 1) / 2` and dumps every buffer element, so an odd-length buffer
+   rounds the declared pair count up. `expected = 4 + pairs * 2` cannot hold.
+
+### Why it appeared to validate
+
+The checksum. `checksum.py` searched a large space of algorithms and found "sum
+with initial value `0x55`" matching every capture — which is true, and is exactly
+what a correct sum over all nine bytes looks like when the frame has been shifted
+so that the constant byte `b0` = `0x55` falls outside the message. A magic seed
+that happens to equal a byte you have excluded is a strong hint that the framing
+is off by a byte. Both readings compute the same arithmetic; only one explains it.
+
+### How it was caught
+
+Re-deriving the mark/space parity from first principles. The final duration of
+every capture is the receive-idle timeout and must be a space; with an odd number
+of durations that forces element 0 to be a space too, and the marks to the odd
+indices. Under that parity the variable elements number exactly 72 on all 39
+captures, the frame is byte-aligned, `b0` is `0x55` in every one, and
+`sum(b0..b7) & 0xFF` matches the ninth byte in every one.
+
+Nothing about the captures changed. Only their interpretation did.
+
+### What was lost
+
+A few timer observations in the original document existed only as decoded bit
+strings, with no accompanying Pronto capture — a fan press during the timer UI,
+and a 15 hour setting. Those bits came from the superseded decoder and cannot be
+recovered, so they were dropped rather than reprinted wrongly.
+
+The image `ir_signal_on_cool_high_notimer_19c.png` plotted the incorrect bit
+decode and was deleted along with `pronto_analyzer.py`, `checksum.py` and
+`decode.py`. All are in the git history.
