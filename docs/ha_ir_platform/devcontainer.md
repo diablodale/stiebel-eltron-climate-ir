@@ -125,4 +125,9 @@ entity's attributes (`last_timings`, `last_modulation`, `last_repeat_count`,
 `InfraredEmitterEntity` owns `state` — it is the last-sent timestamp and is
 `@final` — so the payload has to travel as an attribute.
 
-It is dev-only and is never loaded by a real installation.
+The platform also provides `FakeIrReceiver`, whose `inject(timings)` fans a
+signal out to whoever subscribed via `async_subscribe_receiver`, exactly as real
+hardware would. That is what lets the receiver-sync tests exercise Home
+Assistant's own subscription machinery rather than calling the handler directly.
+
+Both are dev-only and are never loaded by a real installation.

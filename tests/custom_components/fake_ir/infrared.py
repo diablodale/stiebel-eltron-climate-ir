@@ -5,7 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any, override
 
-from homeassistant.components.infrared import InfraredCommand, InfraredEmitterEntity
+from homeassistant.components.infrared import (
+    InfraredCommand,
+    InfraredEmitterEntity,
+    InfraredReceivedSignal,
+    InfraredReceiverEntity,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -21,9 +26,9 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the fake emitter from a YAML `infrared:` platform block."""
+    """Set up the fake emitter and receiver from a YAML `infrared:` block."""
     hass.data.setdefault(DATA_SENT, [])
-    async_add_entities([FakeIrEmitter()])
+    async_add_entities([FakeIrEmitter(), FakeIrReceiver()])
 
 
 class FakeIrEmitter(InfraredEmitterEntity):
@@ -69,3 +74,21 @@ class FakeIrEmitter(InfraredEmitterEntity):
             "last_repeat_count": last["repeat_count"],
             "last_timings": last["timings"],
         }
+
+
+class FakeIrReceiver(InfraredReceiverEntity):
+    """A receiver that hears nothing until a test tells it to."""
+
+    _attr_name = "Fake IR receiver"
+    _attr_unique_id = "fake_ir_receiver"
+
+    def inject(self, timings: list[int], modulation: int = 38000) -> None:
+        """Deliver a signal to every subscriber, as real hardware would.
+
+        `_handle_received_signal` is the hook platform implementations call when
+        their device reports a signal; it is final on the base class and fans out
+        to whoever subscribed via `async_subscribe_receiver`.
+        """
+        self._handle_received_signal(
+            InfraredReceivedSignal(timings=timings, modulation=modulation)
+        )

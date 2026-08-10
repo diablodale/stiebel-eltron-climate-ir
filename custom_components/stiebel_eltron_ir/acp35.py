@@ -260,6 +260,11 @@ class Acp35Command(Command):
             flags = Acp35Flag.CELSIUS if is_celsius else Acp35Flag.NONE
         self.flags = Acp35Flag(flags)
 
+    @property
+    def is_celsius(self) -> bool:
+        """Return whether the unit is displaying Celsius (b7 bit 7)."""
+        return Acp35Flag.CELSIUS in self.flags
+
     def to_bytes(self) -> bytes:
         """Render the nine frame bytes, checksum included."""
         b1 = (self.celsius - _CELSIUS_BIAS) << 4

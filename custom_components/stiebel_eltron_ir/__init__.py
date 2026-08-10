@@ -17,8 +17,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 
-from .acp35 import Acp35Fan, Acp35Mode
+from .acp35 import Acp35Fan, Acp35Mode, celsius_to_fahrenheit
 from .const import CONF_DISPLAY_CELSIUS, CONF_EMITTER, CONF_RECEIVER
+from .receiver import Acp35ReceiverSync
 
 PLATFORMS = [Platform.CLIMATE, Platform.NUMBER]
 
@@ -29,15 +30,26 @@ type Acp35ConfigEntry = ConfigEntry[Acp35Data]
 class Acp35State:
     """What we believe the unit is currently doing.
 
-    Defaults match the remote's own resting state: on, cooling, high fan, 22 °C.
+    Defaults match the remote's own resting state: cooling, high fan, 22 °C.
     They are only used before the first restore.
+
+    Both temperature fields are kept, rather than deriving one from the other on
+    the way out, because the two mappings are not inverses: a frame from a
+    remote displaying Fahrenheit can hold 63 °F with 17 °C, and re-deriving from
+    17 °C would send 62 °F back and shift the unit by a degree.
     """
 
     power: bool = False
     mode: Acp35Mode = Acp35Mode.COOL
     fan: Acp35Fan = Acp35Fan.HIGH
     celsius: int = 22
+    fahrenheit: int = 72
     timer_hours: int = 0
+
+    def set_celsius(self, celsius: int) -> None:
+        """Set the temperature from Celsius, repairing the Fahrenheit field."""
+        self.celsius = celsius
+        self.fahrenheit = celsius_to_fahrenheit(celsius)
 
 
 @dataclass
@@ -71,12 +83,19 @@ class Acp35Data:
 
 async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> bool:
     """Set up one air conditioner from a config entry."""
-    entry.runtime_data = Acp35Data(
+    data = entry.runtime_data = Acp35Data(
         emitter_entity_id=entry.data[CONF_EMITTER],
         receiver_entity_id=entry.data.get(CONF_RECEIVER),
         display_celsius=entry.data.get(CONF_DISPLAY_CELSIUS, True),
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Optional. With no receiver configured the integration is complete as it
+    # stands; it just cannot notice the physical remote being used.
+    if data.receiver_entity_id is not None:
+        sync = Acp35ReceiverSync(hass, data, data.receiver_entity_id)
+        entry.async_on_unload(sync.async_start())
+
     return True
 
 

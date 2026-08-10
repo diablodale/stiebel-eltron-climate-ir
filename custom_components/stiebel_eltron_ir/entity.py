@@ -8,6 +8,7 @@ event bit differs, according to which control the user touched.
 from typing import override
 
 from homeassistant.components.infrared import InfraredEmitterConsumerEntity
+from homeassistant.core import CALLBACK_TYPE
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -26,6 +27,7 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         """Bind the entity to its config entry and infrared emitter."""
         self._entry = entry
         self._data: Acp35Data = entry.runtime_data
+        self._listener: CALLBACK_TYPE | None = None
         self._infrared_emitter_entity_id = self._data.emitter_entity_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -38,7 +40,11 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Track the emitter and follow state changes made by sibling entities."""
         await super().async_added_to_hass()
-        self.async_on_remove(self._data.async_add_listener(self._handle_shared_update))
+        # Keep one reference to the bound method. Every `self._handle_shared_update`
+        # builds a fresh bound-method object, so the identity check that stops us
+        # notifying ourselves in _async_transmit would never match otherwise.
+        self._listener = self._handle_shared_update
+        self.async_on_remove(self._data.async_add_listener(self._listener))
 
     def _handle_shared_update(self) -> None:
         """Write our state when a sibling entity changed the shared state."""
@@ -63,7 +69,11 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
             power=state.power,
             mode=state.mode,
             fan=state.fan,
+            # Both fields go verbatim. Passing only Celsius would re-derive the
+            # Fahrenheit one, which shifts a unit displaying °F by a degree
+            # whenever the two mappings disagree, as they do at 63 °F.
             celsius=state.celsius,
+            fahrenheit=state.fahrenheit,
             timer_hours=state.timer_hours,
             flags=flags,
         )
@@ -72,4 +82,4 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         """Send the current shared state, then refresh every entity."""
         await self._send_command(self._build_command(event))
         self.async_write_ha_state()
-        self._data.async_notify(self._handle_shared_update)
+        self._data.async_notify(self._listener)

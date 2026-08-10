@@ -65,7 +65,7 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
         if (fan := last.attributes.get("fan_mode")) in FAN_TO_ACP:
             state.fan = FAN_TO_ACP[fan]
         if (temperature := last.attributes.get(ATTR_TEMPERATURE)) is not None:
-            state.celsius = _clamp_celsius(temperature)
+            state.set_celsius(_clamp_celsius(temperature))
 
     @property
     @override
@@ -132,7 +132,7 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
         """Set the target temperature."""
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
-        self._data.state.celsius = _clamp_celsius(temperature)
+        self._data.state.set_celsius(_clamp_celsius(temperature))
         await self._async_transmit(Acp35Flag.TEMP_CHANGED)
 
 
