@@ -469,9 +469,76 @@ skips rather than fails. Damping the LED with paper or aiming the pair at a wall
 Either way it cannot recover `HEADER_MARK`: the receive buffer drops the leading mark for
 our own transmissions exactly as it did for the remote's.
 
+### Open questions the hardware must settle
+
+Accumulated across Phases 3–5. Each one is a place where the code had to assume
+something the 39 captures do not answer. They split cleanly by what settles them:
+a **capture** needs only the original remote and the receiver, while an
+**observation** needs transmitting at the unit and watching what it does.
+
+| # | Question | Settled by | What currently assumes an answer |
+| - | -------- | ---------- | -------------------------------- |
+| 1 | The 19 unverified °F → °C pairings | capture | `_FAHRENHEIT_TO_CELSIUS` in `acp35.py`, marked `(v)` where evidenced |
+| 2 | What `b7` bit 0 means | capture | nothing — it is decoded and preserved, never generated |
+| 3 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running, or only while the entry UI is open? | capture | `_build_command` derives it from `timer_hours > 0`, which may set it too often |
+| 4 | Do `b1` bit 3 and `b2` survive a non-timer press? | capture | that the shadow state can hold the timer across other changes |
+| 5 | Does any remote button set `b4`, `b5`, or `b7` bits 5/4/2? | capture | that they are reserved and safe to send as `0` |
+| 6 | Does the remote ever emit fan `0`? | capture | `Acp35Fan.AUTO` exists but is not offered in `fan_modes` |
+| 7 | Does the unit accept our frame at all, and with which header mark? | observation | `HEADER_MARK = 5100`, the one unmeasured constant |
+| 8 | Does the unit require the `b7` event bits, or only `b1`/`b2`/`b3`/`b6`? | observation | `_build_command` mirrors the remote's event bits |
+| 9 | Does the unit accept fan `0` as an auto speed? | observation | whether `fan_modes` can gain `auto` |
+| 10 | Does the unit accept a non-low fan in dry mode? | observation | that we may send any fan with `Acp35Mode.DRY` |
+| 11 | Does the unit act on the unit flag, or is it display-only? | observation | that `display_celsius` is cosmetic and safe to follow from the remote |
+| 12 | Minimum gap between frames, and whether one frame is reliably enough | observation | `repeat_count = 0` and no rate limiting between rapid service calls |
+| 13 | Does a power-off frame really leave the mode running in `b6`? | observation | `async_set_hvac_mode(OFF)` keeps the last mode |
+
+Questions 7 and 12 are the only ones that can stop the integration working at
+all. The rest change behaviour at the edges or would let a restriction be lifted.
+
+### Remote button inventory — the systematic gap
+
+`b4`, `b5` and `b7` bits 5, 4 and 2 are zero in all 39 captures. There are two
+possible reasons and they are worth telling apart: either they are genuinely
+reserved, or **the original capture session never pressed the buttons that use
+them**. The captures cover power, timer, °C/°F, temperature, fan and mode — if
+the TZ20160122 remote has anything else on it (sleep, eco, turbo, swing, display
+or backlight, self-clean, "follow me"), those functions have never been recorded
+and would be the obvious candidates for the unused bits.
+
+This is cheap and worth doing before trusting the "always 0" fields:
+
+1. Photograph or list every button on the remote.
+2. Press each one that has not already been captured, in both directions where it
+   toggles, capturing each frame.
+3. Diff each against a baseline frame of the same machine state — `acp35_cli.py
+   --document --format bytes` makes that easy once they are in the document.
+
+Any bit that moves gets a name in `Acp35Flag` or a new field, and the "always 0"
+claims in the protocol document and in `acp35.py` get corrected. If nothing
+moves, the reserved claim is evidenced rather than assumed, which is worth having
+on the record either way.
+
+### Frame timing and repeats — question 12
+
+Not answerable from captures: the 10.1 ms tail on every one is ESPHome's receive
+idle timeout, not something the remote emitted, so the true inter-frame gap has
+never been observed.
+
+Two things to try once the unit responds at all:
+
+1. **Reliability of a single frame.** Send the same command 20 times with a long
+   pause between, and count how many the unit acts on. If any are missed,
+   `repeat_count` needs raising and the frame is not as unrepeated as the remote
+   made it look.
+2. **Back-to-back frames.** Home Assistant can easily issue two service calls in
+   quick succession — a mode change and a temperature change from one script — and
+   the entity sends a full frame for each with no delay between. Send two frames
+   at decreasing separations to find where the unit starts dropping them, and add
+   a minimum spacing in `_async_transmit` if one is needed.
+
 ### Temperature sweep — close the gap in the °F → °C table
 
-Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
+Question 1. Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
 **°C → °F** entries are confirmed by captures, but only **6 of 25 °F → °C** are —
 62, 63, 64, 72, 75 and 86 °F. The other 19 (65–71, 73, 74, 76–85) follow the same
 rounding rule and are inference.
@@ -495,7 +562,8 @@ set to Fahrenheit.
 
 ### Timer UI recapture — restore observations lost with the old decoder
 
-Discovered in Phase 1b. The original document recorded several timer observations **only**
+Questions 2, 3 and 4. Discovered in Phase 1b: the original document recorded several timer
+observations **only**
 as decoded bit strings, with no accompanying Pronto capture. Those strings came out of the
 superseded analyzer, so they carry its misalignment and cannot be converted to correct
 frames. They were dropped rather than reprinted wrongly, which leaves two real gaps:
@@ -512,15 +580,19 @@ test code. With the KC868-AG receiving, capture each of these and paste the Pron
 into the *Timer* section of the protocol document:
 
 1. Press timer to open the UI, then press **fan** — does `b7` bit 1 clear, does `b1` bit 3
-   stay armed, does `b2` keep its hours?
-2. Press timer, then **up to 15 h**, then wait for the UI to close on its own. Compare the
+   stay armed, does `b2` keep its hours? (questions 3 and 4)
+2. **The one the encoder depends on:** with a timer running and the UI *closed*, press fan
+   or a temperature button. If `b7` bit 1 is clear in that frame, then bit 1 means "the
+   entry UI is open" and `_build_command` is wrong to derive it from `timer_hours > 0`;
+   it should come from the setter instead, like the other event bits. (question 3)
+3. Press timer, then **up to 15 h**, then wait for the UI to close on its own. Compare the
    frame sent on acceptance with the ones sent while the UI was open.
-3. With a timer already running, press timer once to **view the remaining hours**, then let
+4. With a timer already running, press timer once to **view the remaining hours**, then let
    the UI close without cancelling. This is the case the old document flagged with a
    "?remaining?" and never resolved.
-4. The **cancel pair** again, both frames, at two different hour settings — enough to tell
-   whether `b7` bit 0 tracks the hours, the cancel, or something else.
-5. Press timer while the unit is **powered off**, if the remote allows it.
+5. The **cancel pair** again, both frames, at two different hour settings — enough to tell
+   whether `b7` bit 0 tracks the hours, the cancel, or something else. (question 2)
+6. Press timer while the unit is **powered off**, if the remote allows it.
 
 Then update the `Acp35Flag` docstring in `acp35.py` if bit 0 is explained, and replace the
 "lost with the superseded decoder" note in the protocol document's *Timer* section.
