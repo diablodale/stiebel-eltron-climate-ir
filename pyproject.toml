@@ -20,6 +20,10 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# acp35.py is imported as a bare top-level module rather than through the
+# stiebel_eltron_ir package, whose __init__ imports homeassistant and so cannot
+# load outside the devcontainer. acp35 itself is deliberately HA-free.
+pythonpath = ["custom_components/stiebel_eltron_ir", "tools"]
 # tests/custom_components holds Home Assistant components used as test fixtures
 # (fake_ir), not tests. Nothing in there matches test_*.py, but be explicit.
 norecursedirs = ["tests/custom_components"]

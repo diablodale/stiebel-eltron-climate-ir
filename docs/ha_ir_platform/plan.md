@@ -61,9 +61,21 @@ b0  b1  b2  b3  b4  b5  b6  b7  ck
 **`ck` validates on 39/39 captures.** The doc's "initialise the sum with `0x55`" was just
 the constant byte `b0` being excluded from the sum and re-added as a magic seed.
 
-Both temperature fields are always populated:
-`°F = clamp(round(°C × 9/5 + 32), 62, 86)` and `°C = clamp(round((°F − 32) × 5/9), 17, 30)`.
-The clamp matters — 17 °C ships as 62 °F, not the 63 °F plain rounding gives.
+Both temperature fields are always populated. **Corrected during Phase 3** — the
+clamp originally written here does no work: `clamp(round(17 × 9/5 + 32), 62, 86)`
+is 63, but the capture for 17 °C carries 62 °F. The actual behaviour is two
+lookup tables, and they are *not* inverses of each other:
+
+- **°C → °F** is `round(°C × 9/5 + 32)` at all 14 values except 17 °C, which
+  ships as 62 °F. The scales' endpoints are pinned: 17 °C / 62 °F are both the
+  remote's minimum, 30 °C / 86 °F both its maximum. Not `floor()` — that would
+  also change 21, 22, 26 and 27 °C, and the captures show it does not.
+- **°F → °C** is `round((°F − 32) × 5/9)` at all 25 values.
+
+So 17 °C pairs out to 62 °F, while 63 °F pairs back to 17 °C. Whichever unit the
+user selected is authoritative and the other is derived from it. A clamp is a
+no-op in both directions over the whole valid domain, and no input lands on an
+exact `.5`, so rounding mode never matters.
 
 ### `b7` — one state bit, the rest are per-press event bits
 
@@ -357,6 +369,16 @@ provides `_send_command()` and emitter-availability tracking; set
 - `b7` policy lives in one helper: `Acp35Flag.CELSIUS` (when °C) OR'd with the event bit
   for the field being changed, matching the remote exactly. One-line change to a constant
   `b7` if testing shows the event bits are ignored.
+- **Clamp and round the requested temperature at this boundary** (discovered in Phase 3).
+  `Acp35Command` deliberately *raises* `ValueError` outside 17–30 °C rather than clamping,
+  because a caller asking for 35 °C has a bug and should hear about it. But `min_temp` /
+  `max_temp` only constrain the UI — a `climate.set_temperature` service call can carry
+  any float, including a half-degree. So the setter must round to a whole degree and clamp
+  into range before constructing the command, or a stray service call raises out of a
+  service handler instead of doing the obvious thing. Cover it in `tests/test_climate.py`
+  with 5 °C, 99 °C and 21.5 °C.
+- Same boundary applies to `set_fan_mode` and `set_hvac_mode`: map unknown strings to a
+  sensible default rather than letting `Acp35Fan(...)` / `Acp35Mode(...)` raise.
 
 **`number.py`** — one `NumberEntity`, 0–24 h, step 1. `0` means timer off (`b1` bit 3
 clear, `b2` = 0); non-zero arms it. Folds both timer fields into a single control rather
@@ -399,7 +421,7 @@ from stdin, `pytest.skip` if not attached to a tty).
 
 | module | asserts |
 | ------ | ------- |
-| `tests/test_protocol.py` | field packing, the clamped °C↔°F conversions, checksum, `from_raw_timings(get_raw_timings())` round-trip, 17 °C → 62 °F and 30 °C → 86 °F boundaries, out-of-range raises `ValueError` |
+| `tests/test_protocol.py` | field packing, both °C↔°F lookup tables and the rules that generated them, checksum, `from_raw_timings(get_raw_timings())` round-trip, 17 °C → 62 °F and 30 °C → 86 °F boundaries, out-of-range raises `ValueError` |
 | `tests/test_captures.py` | all 39 entries in `captures.jsonl` decode to the expected 9 bytes, checksum-validate, and re-encode to bit-identical timings |
 | `tests/test_cli.py` | `tools/acp35_cli.py` decodes a capture to the documented state, and `--extract` regenerates `captures.jsonl` unchanged |
 
@@ -443,3 +465,27 @@ will likely saturate. A *decode failure* is therefore inconclusive, not a bug �
 skips rather than fails. Damping the LED with paper or aiming the pair at a wall may help.
 Either way it cannot recover `HEADER_MARK`: the receive buffer drops the leading mark for
 our own transmissions exactly as it did for the remote's.
+
+### Temperature sweep — close the gap in the °F → °C table
+
+Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
+**°C → °F** entries are confirmed by captures, but only **6 of 25 °F → °C** are —
+62, 63, 64, 72, 75 and 86 °F. The other 19 (65–71, 73, 74, 76–85) follow the same
+rounding rule and are inference.
+
+This needs no transmit test and no new test code. It is a *capture* exercise against the
+original remote, not a hardware test of our encoder:
+
+1. Put the remote in °F mode and step through the full 62–86 range with the KC868-AG
+   receiving, logging one frame per value.
+2. Sweep 17–30 °C the same way. All 14 are already confirmed, so this run's value is
+   catching any transcription error in the original corpus.
+3. Paste the Pronto lines into the protocol document under a *Temperature sweep* heading.
+
+`tests/conftest.py` parses that document directly, so the corpus grows on its own and
+`test_temperature_fields_agree` validates each new entry with no code change. Then update
+the `(v)` provenance markers on `_FAHRENHEIT_TO_CELSIUS` in `acp35.py` and drop the
+"6 of 25 confirmed" caveat.
+
+Worth doing before Phase 4, since the °F path is user-visible whenever the display unit is
+set to Fahrenheit.
