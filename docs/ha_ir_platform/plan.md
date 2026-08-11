@@ -440,7 +440,12 @@ host instead of erroring.
 | `tests/test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
 | `tests/test_receiver.py` | feeds recorded remote timings straight into `_handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
 
-### `-m hardware` — the four things that genuinely need the device
+### `-m hardware` — the harness for the device
+
+**What** these tests ask is not written here. Every inquiry lives exactly once, in
+*Open questions the hardware must settle* below; this section is only the harness that
+puts each one in front of the device. A row that adds a question rather than citing one
+is a bug in this document.
 
 The KC868-AG lives on the production HA instance. Two ways to bridge that; the first is
 less disruptive and is the recommendation:
@@ -456,12 +461,16 @@ less disruptive and is the recommendation:
   does accept multiple simultaneous clients, so both instances *can* connect at once, but
   that is untested territory — prefer a clean handoff.)
 
-| module | marks | behaviour |
-| ------ | ----- | --------- |
-| `tests/hardware/test_header_mark.py` | `hardware, manual` | Parametrised over `5100, 4400, 3000, 9000, 0`. Sends power-on with each candidate and `confirm("did the unit respond?")`. Exactly one is expected to pass; the winner is written into the doc and `acp35.py`. If all fail, a second parametrisation adds `CARRIER_HZ` as a variable |
-| `tests/hardware/test_loopback.py` | `hardware` | Fully automatic. A session fixture first transmits once and checks `esphome_logs` for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise, for each state it sends the command, decodes the captured Pronto line to 9 bytes, and asserts equality with both the bytes we intended and the bytes the original remote produced for that state (already in the `.md`) |
-| `tests/hardware/test_behaviour.py` | `hardware, manual` | The matrix no capture can answer: power on/off, all four modes, all three fan speeds plus a fan-auto (`b6` = `0x0x`) probe, 17 °C and 30 °C, °F display, a non-low fan in dry mode, timer 1 h / 24 h / cancel, and whether a constant `b7` of just `CELSIUS` is honoured. Each case sends and `confirm`s. Results get folded back into the doc and the encoder |
-| `tests/hardware/test_receiver_sync.py` | `hardware, manual` | Skips unless the ESPHome device exposes a receiver entity. Prompts the operator to press a button on the physical remote, then asserts the HA climate entity followed. A companion case clears the receiver from the config and asserts climate + timer still work |
+| module | marks | settles | how it drives the device |
+| ------ | ----- | ------- | ------------------------ |
+| `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `acp35.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
+| `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
+| `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
+| `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and checks `esphome_logs` for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the captured Pronto line decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |
+| `tests/hardware/test_receiver_sync.py` | `hardware, manual` | — | Not a question: end-to-end proof of Phase 5. Skips unless the device exposes a receiver entity, prompts for a press on the physical remote, asserts the climate entity followed. A companion case clears the receiver and asserts climate + timer still work |
+
+Questions 1–6 have no module here; they are capture exercises rather than tests, for
+the reason given below the first question group.
 
 On the loopback test specifically: the receiver sits centimetres from the emitting LED and
 will likely saturate. A *decode failure* is therefore inconclusive, not a bug — the fixture
@@ -472,30 +481,94 @@ our own transmissions exactly as it did for the remote's.
 ### Open questions the hardware must settle
 
 Accumulated across Phases 3–5. Each one is a place where the code had to assume
-something the 39 captures do not answer. They split cleanly by what settles them:
-a **capture** needs only the original remote and the receiver, while an
-**observation** needs transmitting at the unit and watching what it does.
+something the 39 captures do not answer. **This table is the single list** — the
+`-m hardware` section above is only the harness that runs them, and the subsections
+below expand the ones that need a procedure rather than a single press.
 
-| # | Question | Settled by | What currently assumes an answer |
-| - | -------- | ---------- | -------------------------------- |
-| 1 | The 19 unverified °F → °C pairings | capture | `_FAHRENHEIT_TO_CELSIUS` in `acp35.py`, marked `(v)` where evidenced |
-| 2 | What `b7` bit 0 means | capture | nothing — it is decoded and preserved, never generated |
-| 3 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running, or only while the entry UI is open? | capture | `_build_command` derives it from `timer_hours > 0`, which may set it too often |
-| 4 | Do `b1` bit 3 and `b2` survive a non-timer press? | capture | that the shadow state can hold the timer across other changes |
-| 5 | Does any remote button set `b4`, `b5`, or `b7` bits 5/4/2? | capture | that they are reserved and safe to send as `0` |
-| 6 | Does the remote ever emit fan `0`? | capture | `Acp35Fan.AUTO` exists but is not offered in `fan_modes` |
-| 7 | Does the unit accept our frame at all, and with which header mark? | observation | `HEADER_MARK = 5100`, the one unmeasured constant |
-| 8 | Does the unit require the `b7` event bits, or only `b1`/`b2`/`b3`/`b6`? | observation | `_build_command` mirrors the remote's event bits |
-| 9 | Does the unit accept fan `0` as an auto speed? | observation | whether `fan_modes` can gain `auto` |
-| 10 | Does the unit accept a non-low fan in dry mode? | observation | that we may send any fan with `Acp35Mode.DRY` |
-| 11 | Does the unit act on the unit flag, or is it display-only? | observation | that `display_celsius` is cosmetic and safe to follow from the remote |
-| 12 | Minimum gap between frames, and whether one frame is reliably enough | observation | `repeat_count = 0` and no rate limiting between rapid service calls |
-| 13 | Does a power-off frame really leave the mode running in `b6`? | observation | `async_set_hvac_mode(OFF)` keeps the last mode |
+There are 15, in three groups. **The number is the sequence: work them in order.**
+Within a group they are ordered by what unblocks what, and by what is cheapest to
+learn first. The subsections below appear in the same order and expand the ones that
+need a procedure rather than a single press.
 
-Questions 7 and 12 are the only ones that can stop the integration working at
-all. The rest change behaviour at the edges or would let a restriction be lifted.
+**Questions 1–6: point the receiver at the original remote.** No transmitting, so
+nothing here can confuse the air conditioner and none of it waits on question 7.
+This is the whole of the work that can be done in an evening with the TZ20160122 and
+the KC868-AG, and it needs no new test code — the frames go into the protocol
+document and `tests/test_captures.py` picks them up.
 
-### Remote button inventory — the systematic gap
+| # | Question | Run by | What currently assumes an answer |
+| - | -------- | ------ | -------------------------------- |
+| 1 | The 19 unverified °F → °C pairings | into the doc | `_FAHRENHEIT_TO_CELSIUS` in `acp35.py`, marked `(v)` where evidenced |
+| 2 | Does any remote button set `b4`, `b5`, or `b7` bits 5/4/2? | into the doc | that they are reserved and safe to send as `0` |
+| 3 | Does the remote ever emit fan `0`? | into the doc | `Acp35Fan.AUTO` exists but is not offered in `fan_modes` |
+| 4 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running, or only while the entry UI is open? | into the doc | `_build_command` derives it from `timer_hours > 0`, which may set it too often |
+| 5 | Do `b1` bit 3 and `b2` survive a non-timer press? | into the doc | that the shadow state can hold the timer across other changes |
+| 6 | What `b7` bit 0 means | into the doc | nothing — it is decoded and preserved, never generated |
+
+Why this order: 1 is the largest evidence gap and the °F path is user-visible, 2 is a
+single systematic pass over the remote, and 3 falls out of that same pass for free.
+4 and 5 are the two timer answers the encoder actually depends on, and 6 is last
+because nothing in the code rests on it — it is an unexplained bit, not an assumption.
+
+**Questions 7–9: blocking.** A wrong answer here is not an edge case — the
+integration is unusable or silently does the wrong thing, and no fallback exists in
+the code. There are three, not the two previously claimed: question 8 belongs with
+them because the captures evidence the frame *format* only. That every field means
+to the unit what the document says it means is inference, and a swapped mode or fan
+value would ship an integration whose controls are confidently mislabelled.
+
+| # | Question | Run by | What currently assumes an answer |
+| - | -------- | ------ | -------------------------------- |
+| 7 | Does the unit accept our frame at all, and with which header mark — `5100`, `4400`, `3000`, `9000` or none? | `test_header_mark.py` | `HEADER_MARK = 5100`, the one unmeasured constant |
+| 8 | Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C, timer 1 h / 24 h / cancel? | `test_behaviour.py` | the whole of `const.py`'s enum mapping |
+| 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
+
+Why this order: until the unit responds to anything, neither of the others can be
+attempted, so 7 leads. 8 then establishes that a given command is acted on, which 9
+depends on — "did it act on the frame" is the measurement 9 repeats at shrinking gaps.
+
+**Questions 10–15: everything else.** Each would refine behaviour at the edges or let
+a restriction be lifted, and each has a defensible answer already committed to code,
+so none of them gates a release.
+
+| # | Question | Run by | What currently assumes an answer |
+| - | -------- | ------ | -------------------------------- |
+| 10 | Do our frames reach the air as the bytes we built, and match the remote's for the same state? | `test_loopback.py` | that nothing between `get_raw_timings()` and the LED reshapes the waveform |
+| 11 | Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough? | `test_behaviour.py` | `_build_command` mirrors the remote's event bits — safe either way, so this only buys simplification |
+| 12 | Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed? | `test_behaviour.py` | whether `fan_modes` can gain `auto` |
+| 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | that we may send any fan with `Acp35Mode.DRY` |
+| 14 | Does the unit act on the unit flag, or is it display-only? | `test_behaviour.py` | that `display_celsius` is cosmetic and safe to follow from the remote |
+| 15 | Does a power-off frame really leave the mode running in `b6`? | `test_behaviour.py` | `async_set_hvac_mode(OFF)` keeps the last mode |
+
+Why 10 leads: it is the only fully automatic test in the hardware set, and if the
+receiver can hear the emitter it turns a failure of 7 into a diagnosis rather than a
+guess — worth running alongside 7 even though it sits in this group. It is not itself
+blocking precisely because it may be unanswerable, for the saturation reason noted
+with the harness above; something that might never return an answer cannot gate a
+release. 12 is worth pairing with 3, which asks the same thing of the remote.
+
+### Temperature sweep — question 1
+
+Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
+**°C → °F** entries are confirmed by captures, but only **6 of 25 °F → °C** are —
+62, 63, 64, 72, 75 and 86 °F. The other 19 (65–71, 73, 74, 76–85) follow the same
+rounding rule and are inference.
+
+This needs no transmit test and no new test code. It is a *capture* exercise against the
+original remote, not a hardware test of our encoder:
+
+1. Put the remote in °F mode and step through the full 62–86 range with the KC868-AG
+   receiving, logging one frame per value.
+2. Sweep 17–30 °C the same way. All 14 are already confirmed, so this run's value is
+   catching any transcription error in the original corpus.
+3. Paste the Pronto lines into the protocol document under a *Temperature sweep* heading.
+
+`tests/conftest.py` parses that document directly, so the corpus grows on its own and
+`test_temperature_fields_agree` validates each new entry with no code change. Then update
+the `(v)` provenance markers on `_FAHRENHEIT_TO_CELSIUS` in `acp35.py` and drop the
+"6 of 25 confirmed" caveat.
+
+### Remote button inventory — questions 2 and 3
 
 `b4`, `b5` and `b7` bits 5, 4 and 2 are zero in all 39 captures. There are two
 possible reasons and they are worth telling apart: either they are genuinely
@@ -518,52 +591,14 @@ claims in the protocol document and in `acp35.py` get corrected. If nothing
 moves, the reserved claim is evidenced rather than assumed, which is worth having
 on the record either way.
 
-### Frame timing and repeats — question 12
+The same pass answers question 3 at no extra cost: cycle the fan button through its
+full loop and see whether `b6`'s high nibble ever reads `0`. If it does, the remote
+has a fan-auto the captures missed and `fan_modes` should gain it — subject to
+question 12, which asks the unit the same thing.
 
-Not answerable from captures: the 10.1 ms tail on every one is ESPHome's receive
-idle timeout, not something the remote emitted, so the true inter-frame gap has
-never been observed.
+### Timer UI recapture — questions 4, 5 and 6
 
-Two things to try once the unit responds at all:
-
-1. **Reliability of a single frame.** Send the same command 20 times with a long
-   pause between, and count how many the unit acts on. If any are missed,
-   `repeat_count` needs raising and the frame is not as unrepeated as the remote
-   made it look.
-2. **Back-to-back frames.** Home Assistant can easily issue two service calls in
-   quick succession — a mode change and a temperature change from one script — and
-   the entity sends a full frame for each with no delay between. Send two frames
-   at decreasing separations to find where the unit starts dropping them, and add
-   a minimum spacing in `_async_transmit` if one is needed.
-
-### Temperature sweep — close the gap in the °F → °C table
-
-Question 1. Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
-**°C → °F** entries are confirmed by captures, but only **6 of 25 °F → °C** are —
-62, 63, 64, 72, 75 and 86 °F. The other 19 (65–71, 73, 74, 76–85) follow the same
-rounding rule and are inference.
-
-This needs no transmit test and no new test code. It is a *capture* exercise against the
-original remote, not a hardware test of our encoder:
-
-1. Put the remote in °F mode and step through the full 62–86 range with the KC868-AG
-   receiving, logging one frame per value.
-2. Sweep 17–30 °C the same way. All 14 are already confirmed, so this run's value is
-   catching any transcription error in the original corpus.
-3. Paste the Pronto lines into the protocol document under a *Temperature sweep* heading.
-
-`tests/conftest.py` parses that document directly, so the corpus grows on its own and
-`test_temperature_fields_agree` validates each new entry with no code change. Then update
-the `(v)` provenance markers on `_FAHRENHEIT_TO_CELSIUS` in `acp35.py` and drop the
-"6 of 25 confirmed" caveat.
-
-Worth doing before Phase 4, since the °F path is user-visible whenever the display unit is
-set to Fahrenheit.
-
-### Timer UI recapture — restore observations lost with the old decoder
-
-Questions 2, 3 and 4. Discovered in Phase 1b: the original document recorded several timer
-observations **only**
+Discovered in Phase 1b: the original document recorded several timer observations **only**
 as decoded bit strings, with no accompanying Pronto capture. Those strings came out of the
 superseded analyzer, so they carry its misalignment and cannot be converted to correct
 frames. They were dropped rather than reprinted wrongly, which leaves two real gaps:
@@ -580,23 +615,41 @@ test code. With the KC868-AG receiving, capture each of these and paste the Pron
 into the *Timer* section of the protocol document:
 
 1. Press timer to open the UI, then press **fan** — does `b7` bit 1 clear, does `b1` bit 3
-   stay armed, does `b2` keep its hours? (questions 3 and 4)
+   stay armed, does `b2` keep its hours? (questions 4 and 5)
 2. **The one the encoder depends on:** with a timer running and the UI *closed*, press fan
    or a temperature button. If `b7` bit 1 is clear in that frame, then bit 1 means "the
    entry UI is open" and `_build_command` is wrong to derive it from `timer_hours > 0`;
-   it should come from the setter instead, like the other event bits. (question 3)
+   it should come from the setter instead, like the other event bits. (question 4)
 3. Press timer, then **up to 15 h**, then wait for the UI to close on its own. Compare the
    frame sent on acceptance with the ones sent while the UI was open.
 4. With a timer already running, press timer once to **view the remaining hours**, then let
    the UI close without cancelling. This is the case the old document flagged with a
    "?remaining?" and never resolved.
 5. The **cancel pair** again, both frames, at two different hour settings — enough to tell
-   whether `b7` bit 0 tracks the hours, the cancel, or something else. (question 2)
+   whether `b7` bit 0 tracks the hours, the cancel, or something else. (question 6)
 6. Press timer while the unit is **powered off**, if the remote allows it.
 
 Then update the `Acp35Flag` docstring in `acp35.py` if bit 0 is explained, and replace the
 "lost with the superseded decoder" note in the protocol document's *Timer* section.
 
-Lower priority than the temperature sweep: the timer is a single `NumberEntity` in
-Phase 4 and its 0–24 h behaviour is already well evidenced. This closes a documentation
-gap and an unexplained bit, not a blocking unknown.
+This closes a documentation gap and an unexplained bit, not a blocking unknown: the
+timer is a single `NumberEntity` and its 0–24 h behaviour is already well evidenced.
+
+### Frame timing and repeats — question 9
+
+Not answerable from captures: the 10.1 ms tail on every one is ESPHome's receive
+idle timeout, not something the remote emitted, so the true inter-frame gap has
+never been observed.
+
+Two things to try, once 8 has established that the unit reliably acts on a command
+sent in isolation — without that baseline a missed frame here is unattributable:
+
+1. **Reliability of a single frame.** Send the same command 20 times with a long
+   pause between, and count how many the unit acts on. If any are missed,
+   `repeat_count` needs raising and the frame is not as unrepeated as the remote
+   made it look.
+2. **Back-to-back frames.** Home Assistant can easily issue two service calls in
+   quick succession — a mode change and a temperature change from one script — and
+   the entity sends a full frame for each with no delay between. Send two frames
+   at decreasing separations to find where the unit starts dropping them, and add
+   a minimum spacing in `_async_transmit` if one is needed.
