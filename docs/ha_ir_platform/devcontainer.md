@@ -42,14 +42,17 @@ npx --yes @devcontainers/cli up --workspace-folder ~/src/ha-core \
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   bash -lc 'ls /workspaces/acp35 && touch /workspaces/acp35/.mnt-probe'
 
-# 4. Link both custom components into the Home Assistant config directory.
-#    ha-core gitignores /config, so the sources live in this repo and are
-#    symlinked in. The targets are *container* paths and only resolve there.
-ln -s /workspaces/acp35/tests/custom_components/fake_ir \
-      ~/src/ha-core/config/custom_components/fake_ir
-ln -s /workspaces/acp35/custom_components/stiebel_eltron_ir \
-      ~/src/ha-core/config/custom_components/stiebel_eltron_ir
+# 4. Create the six symlinks ha-core needs to load this repo's sources.
+#    ha-core gitignores config/, and its test tree must contain the integration
+#    tests for them to reach the `hass` fixture, so both reference sources here.
+#    Runs inside the container, where the target paths resolve. Re-running is safe.
+npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
+  /workspaces/acp35/tools/link_devcontainer.sh
 ```
+
+`tools/link_devcontainer.sh` is the only definition of that wiring; it prints each
+link it creates and fails if one does not resolve. It takes `ACP35_DIR` and
+`HA_CORE_DIR` from the environment if the container ever uses different paths.
 
 Then append to `~/src/ha-core/config/configuration.yaml`:
 
@@ -62,19 +65,9 @@ infrared:
 
 The tests in `tests/integration/` need ha-core's `hass` fixture and
 `MockConfigEntry`, so they run from **ha-core's** test tree rather than this
-repo's. Three more symlinks wire them in:
-
-```bash
-# The tests themselves, as if they were a core component's suite
-ln -s /workspaces/acp35/tests/integration \
-      ~/src/ha-core/tests/components/stiebel_eltron_ir
-
-# Both custom components, where `enable_custom_integrations` looks for them
-ln -s /workspaces/acp35/custom_components/stiebel_eltron_ir \
-      ~/src/ha-core/tests/testing_config/custom_components/stiebel_eltron_ir
-ln -s /workspaces/acp35/tests/custom_components/fake_ir \
-      ~/src/ha-core/tests/testing_config/custom_components/fake_ir
-```
+repo's. Three of the six symlinks in step 4 wire them in: the tests themselves as
+if they were a core component's suite, plus both custom components where
+`enable_custom_integrations` looks for them.
 
 `tests/integration/conftest.py` puts `tests/testing_config` on `sys.path` so the
 tests import `custom_components.stiebel_eltron_ir` — the *same* module object
@@ -115,29 +108,31 @@ Docker Desktop's NAT, though outbound API connections to the LAN are fine.
 
 Settings → Devices → Add integration → ESPHome → enter the IP and the encryption
 key. The device's two `ir_rf_proxy` instances arrive as two HA entities.
-Write the receiver's entity id as the `receiver` configuration value of
-`acp35_bench` in `configuration.yaml`:
 
-```yaml
-acp35_bench:
-  receiver: infrared.examplekc868_ag_ir_proxy_receiver
-  journal: /workspaces/acp35/tests/hardware/journal.jsonl
-```
-
-and symlink it in beside the others, exactly as `fake_ir` is:
+`acp35_bench` records what the receiver delivers, and needs that receiver's entity
+id. Read it from Home Assistant rather than deriving it from the ESPHome config,
+then write the configuration entry with the same script as step 4:
 
 ```bash
-ln -s /workspaces/acp35/tests/custom_components/acp35_bench \
-      ~/src/ha-core/config/custom_components/acp35_bench
+# Two emitters and two receivers exist once fake_ir is loaded; `real` marks the
+# device, and resolve_entity() refuses to select a simulated one.
+uv run python tools/hw.py entities
+
+npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
+  /workspaces/acp35/tools/link_devcontainer.sh --receiver infrared.<receiver id>
 ```
+
+That appends `acp35_bench:` to `configuration.yaml` if it is not already present,
+naming the receiver and the journal path. Restart Home Assistant afterwards.
 
 The journal path is a *container* path that lands in this repo through the bind
 mount, so the file is readable from Windows and WSL2 while Home Assistant is still
 writing it. It is gitignored: frames worth keeping are promoted into the protocol
 document, and the rest is session noise.
 
-`tools/hw.py` then drives the session from the host. Copy `.env.example` to `.env`
-and fill in a long-lived token from the devcontainer's Home Assistant:
+`tools/hw.py` then drives the session from the host. Copy `.env.example` to `.env`,
+which is gitignored, and fill in `HA_TOKEN` with a long-lived access token from the
+devcontainer's Home Assistant rather than the production one:
 
 ```bash
 uv run python tools/hw.py status                       # is the receiver subscribed

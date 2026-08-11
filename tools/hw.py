@@ -12,8 +12,9 @@ protocol document, which ``tests/conftest.py`` parses as the regression corpus.
     tools/hw.py status                              # subscription and counts
 
 ``entities`` and ``mark`` call the Home Assistant REST API; the others read the
-journal file and run with the container stopped. Set HA_URL and HA_TOKEN, or
-define them in a ``.env`` beside ``pyproject.toml``.
+journal file and run with the container stopped. Both need HA_URL and HA_TOKEN,
+from the environment or from a ``.env`` beside ``pyproject.toml``; copy
+``.env.example`` to create one.
 """
 
 import argparse
@@ -42,6 +43,13 @@ DEFAULT_HA_URL = "http://localhost:8123"
 # derive from the _attr_name values in tests/custom_components/fake_ir, which is
 # what makes this prefix a contract rather than a guess.
 SIMULATED_PREFIX = "infrared.fake_ir"
+
+# A frame is 147 durations. Ambient infrared triggers the demodulator often, and
+# the receiver delivers each glitch as two: one short mark and the 10 ms idle
+# timeout. Measured bursts run 112-369 us against a shortest real element of
+# 463 us, but length separates the two far more cleanly than duration does, and
+# nothing of intermediate length has been observed.
+MIN_FRAME_DURATIONS = 100
 
 
 def load_dotenv() -> None:
@@ -79,6 +87,16 @@ def since_last_mark(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if records[index]["kind"] == "mark":
             return records[index:]
     return records
+
+
+def is_frame(record: dict[str, Any]) -> bool:
+    """Return whether a record is a signal long enough to be a frame."""
+    return record["kind"] == "signal" and len(record["timings"]) >= MIN_FRAME_DURATIONS
+
+
+def is_noise(record: dict[str, Any]) -> bool:
+    """Return whether a record is a signal too short to be a frame."""
+    return record["kind"] == "signal" and not is_frame(record)
 
 
 def label_of(records: list[dict[str, Any]], upto: int) -> str:
@@ -249,6 +267,10 @@ def cmd_journal(args: argparse.Namespace) -> int:
         return 0
 
     selected = since_last_mark(records) if args.since_mark else records
+    hidden = 0
+    if not args.all:
+        hidden = sum(1 for record in selected if is_noise(record))
+        selected = [record for record in selected if not is_noise(record)]
     if args.tail:
         selected = selected[-args.tail :]
 
@@ -260,6 +282,14 @@ def cmd_journal(args: argparse.Namespace) -> int:
             print(f"{stamp}  -- {record['label']} --")
         else:
             print(f"{stamp}  ({record['kind']})")
+
+    # Say what was dropped. A silent filter reads as "the remote emitted
+    # nothing" when it in fact means "everything heard was too short".
+    if hidden:
+        print(
+            f"({hidden} signals shorter than {MIN_FRAME_DURATIONS} durations "
+            "hidden as noise; --all to show them)"
+        )
     return 0
 
 
@@ -269,12 +299,16 @@ def cmd_pronto(args: argparse.Namespace) -> int:
     selected = since_last_mark(records) if args.since_mark else records
 
     frames = [
-        (index, record)
-        for index, record in enumerate(selected)
-        if record["kind"] == "signal"
+        (index, record) for index, record in enumerate(selected) if is_frame(record)
     ]
     if not frames:
-        print("no frames captured", file=sys.stderr)
+        noise = sum(1 for record in selected if is_noise(record))
+        print(
+            f"no frames captured ({noise} noise signals)"
+            if noise
+            else "no frames captured",
+            file=sys.stderr,
+        )
         return 1
 
     for index, record in frames:
@@ -296,16 +330,18 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 1
 
     ready = [r for r in records if r["kind"] in ("receiver_ready", "receiver_lost")]
-    signals = [r for r in records if r["kind"] == "signal"]
+    frames = [r for r in records if is_frame(r)]
+    noise = [r for r in records if is_noise(r)]
     print(f"journal      {args.journal}")
     print(f"records      {len(records)}")
-    print(f"frames       {len(signals)}")
+    print(f"frames       {len(frames)}")
+    print(f"noise        {len(noise)} signals under {MIN_FRAME_DURATIONS} durations")
     if ready:
         print(f"receiver     {ready[-1]['kind']} at {ready[-1]['at']}")
     else:
         print("receiver     never became available")
-    if signals:
-        print(f"last frame   {signals[-1]['at']}")
+    if frames:
+        print(f"last frame   {frames[-1]['at']}")
     return 0
 
 
@@ -337,6 +373,9 @@ def main(argv: list[str] | None = None) -> int:
         "--since-mark",
         action="store_true",
         help="only records from the last mark onward",
+    )
+    journal.add_argument(
+        "--all", action="store_true", help="include signals filtered out as noise"
     )
     journal.set_defaults(func=cmd_journal)
 
