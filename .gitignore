@@ -3,3 +3,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Home Assistant URL and long-lived token for the hardware session.
+.env
+
+# Raw capture journal. Frames worth keeping are promoted into the protocol
+# document as Pronto blocks by `tools/hw.py pronto`; the rest is session noise.
+tests/hardware/journal.jsonl

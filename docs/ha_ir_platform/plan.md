@@ -182,7 +182,7 @@ dependencies = ["infrared-protocols>=9"]
 
 [dependency-groups]
 dev = ["pytest"]
-hardware = ["aioesphomeapi", "httpx"]   # only for `pytest -m hardware`
+hardware = ["httpx"]                # only for `pytest -m hardware`
 
 [tool.pytest.ini_options]
 markers = [
@@ -414,11 +414,16 @@ Every `manual` test also carries `hardware`, so that single filter covers both. 
 deliberately: `uv run pytest -m hardware`, or `-m "hardware and not manual"` for the subset
 that needs no human, `-s` for the ones that prompt.
 
-`tests/conftest.py` supplies the fixtures that make hardware tests skip cleanly rather than
-fail: `ha_client` (HA REST session from `HA_URL`/`HA_TOKEN`, `pytest.skip` if unset),
-`esphome_logs` (subscribes via `aioesphomeapi` to capture `remote.pronto` lines,
-`pytest.skip` if unreachable), and `confirm(prompt)` (prints an instruction, reads a y/n
-from stdin, `pytest.skip` if not attached to a tty).
+`tests/hardware/conftest.py` supplies the fixtures that make hardware tests skip cleanly
+rather than fail: `ha` (a REST session from `HA_URL`/`HA_TOKEN`, `pytest.skip` if unset or
+Home Assistant is unreachable), `journal` (the frames `acp35_bench` recorded, with a helper
+that waits for the next one and `pytest.skip`s if the receiver never became available), and
+`ask(question)` (resolves against `answers.toml`, prompts if a tty is attached, otherwise
+skips printing the question).
+
+No direct connection to the ESPHome device is needed from the test process: the bench is
+already inside Home Assistant, on the other end of the same API. That is why the `hardware`
+dependency group carries only an HTTP client and not `aioesphomeapi`.
 
 ### Always runs — pure Python, no HA, no hardware
 
@@ -447,36 +452,104 @@ host instead of erroring.
 puts each one in front of the device. A row that adds a question rather than citing one
 is a bug in this document.
 
-The KC868-AG lives on the production HA instance. Two ways to bridge that; the first is
-less disruptive and is the recommendation:
+**Decided: bring the device to the code.** The KC868-AG is added to the *devcontainer's*
+Home Assistant by IP address, since mDNS discovery does not cross Docker Desktop's NAT.
+The alternative — copying the integration into production HA — was rejected: it would
+test the code in an instance we cannot restart freely, and every question below needs
+restarts. Wiring is in [devcontainer.md](devcontainer.md).
 
-- **Recommended: bring the code to the device.** Copy `custom_components/stiebel_eltron_ir`
-  into the production HA config and add the integration there, selecting the existing
-  ESPHome emitter entity. Point `HA_URL`/`HA_TOKEN` at production and run
-  `pytest -m hardware`. Nothing about the device or production HA changes.
-- **Alternative: bring the device to the code.** Remove the ESPHome device from production
-  HA and add it to the devcontainer instance. This works, with one catch: mDNS discovery
-  will not cross Docker Desktop's NAT, so the device must be added **by IP address**
-  manually. Outbound API connections from the container to the LAN are fine. (ESPHome's API
-  does accept multiple simultaneous clients, so both instances *can* connect at once, but
-  that is untested territory — prefer a clean handoff.)
+The device exposes the new infrared platform entities, an emitter and a receiver, which
+is what makes the rest of this section possible. Our integration is exercised exactly as
+it will ship rather than through a substitute transport.
+
+#### What the developer's IR device's own config settles
+
+ESPHome 2026.7.4, `infrared:` with two `ir_rf_proxy` instances over
+`remote_transmitter` `ir_tx` (GPIO2) and `remote_receiver` `ir_rx` (GPIO23, inverted).
+Entity ids follow from the names: `infrared.kc868_ag_ir_proxy_transmitter` and
+`infrared.kc868_ag_ir_proxy_receiver`.
+
+Four things worth having on the record before a session:
+
+- **`idle` is not overridden, so it is ESPHome's default 10 ms.** That confirms rather
+  than infers the 9990 µs tail on all 39 captures. It also bounds question 9: two frames
+  closer together than 10 ms arrive as *one* merged buffer, so a loopback capture cannot
+  measure a gap shorter than that. The unit's own tolerance can still be probed; only our
+  ability to observe it over the receiver stops at 10 ms.
+- **No `dump:` is configured.** The Pronto log lines that produced the original corpus no
+  longer appear. Nothing needs them — the bench takes timings over the native API — but
+  do not go looking for `remote.pronto` in the logs and conclude the receiver is broken.
+- **`filter` and `buffer_size` are defaults**, 50 µs and 10 kB. The shortest duration in
+  the corpus is 474 µs and a frame is 74 RMT symbols, so neither is close to binding.
+- **BLE is active**: `esp32_ble_tracker` plus `bluetooth_proxy` with active connections.
+  Scanning competes for interrupt latency on the same chip that is timing IR edges. If
+  captured durations come back noisier than the corpus's tight spreads, disabling BLE and
+  recapturing is the first diagnostic, not a protocol mystery.
+
+#### Getting at the platform from outside Home Assistant
+
+Neither half of the infrared platform is reachable over REST. `async_subscribe_receiver`
+delivers signals to an in-process callback and fires no event, and `async_send_command`
+takes a `Command` object, which no service call can carry. So a dev-only component,
+`tests/custom_components/acp35_bench`, is loaded inside Home Assistant to bridge both
+directions. It writes every received frame to a JSONL journal in this repo — reachable
+from the host through the bind mount while Home Assistant is still writing it.
+
+`tools/hw.py` drives a session from the host: `mark` labels what is about to be pressed,
+`journal` decodes what was heard, `pronto` renders new frames as document-ready blocks.
+The bench never decodes anything itself; that is `hw.py`'s job, using the shipping
+`acp35.py`, so the code validating a capture is the same code that will encode our
+transmissions rather than a second implementation that could agree with itself.
+
+#### Human answers are recorded, not typed
+
+A hardware run cannot depend on somebody watching a terminal, and an assistant driving
+the session cannot hold one open at all. So `ask()` resolves against
+`tests/hardware/answers.toml` first: an answer already recorded means the test asserts
+against it non-interactively; missing with a tty attached means it prompts and records
+what it is told; missing with no tty means the test **skips and prints the question**.
+
+`uv run pytest -m hardware` is therefore always safe to run, and its output is a precise
+list of what remains unanswered. Nothing is asked twice, and every answer keeps its
+evidence beside it.
+
+Where a question needs the operator's eyes, prefer encoding the answer in the unit's own
+display over asking once per case. The header-mark bisect sends each candidate as a
+different target temperature, so one glance at the display — "what does it read?" —
+identifies the winner instead of five separate confirmations.
 
 | module | marks | settles | how it drives the device |
 | ------ | ----- | ------- | ------------------------ |
 | `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `acp35.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
 | `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
 | `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
-| `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and checks `esphome_logs` for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the captured Pronto line decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |
+| `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and looks in the bench journal for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the journalled frame decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |
 | `tests/hardware/test_receiver_sync.py` | `hardware, manual` | — | Not a question: end-to-end proof of Phase 5. Skips unless the device exposes a receiver entity, prompts for a press on the physical remote, asserts the climate entity followed. A companion case clears the receiver and asserts climate + timer still work |
 
 Questions 1–6 have no module here; they are capture exercises rather than tests, for
-the reason given below the first question group.
+the reason given below the first question group. They run through the bench and
+`tools/hw.py` instead.
 
 On the loopback test specifically: the receiver sits centimetres from the emitting LED and
 will likely saturate. A *decode failure* is therefore inconclusive, not a bug — the fixture
 skips rather than fails. Damping the LED with paper or aiming the pair at a wall may help.
-Either way it cannot recover `HEADER_MARK`: the receive buffer drops the leading mark for
-our own transmissions exactly as it did for the remote's.
+
+#### The header mark: still a bisect, but confirm it in one press
+
+ESPHome's infrared platform delivers `event.timings` over the native API with no Pronto
+conversion, which briefly looked like it might recover the leading mark the dumper lost.
+It almost certainly does not. The ESPHome device yaml points the `ir_rf_proxy` receiver at
+`remote_receiver_id: ir_rx` — the *same* component the Pronto dumper read. Both consume
+one buffer, and the mark is missing from the buffer itself, not from the conversion. The
+bisect stands.
+
+Confirm it anyway on the first frame of the first session, because it costs nothing:
+`tools/hw.py journal` prints the duration count immediately. **147 durations starting
+negative** means the corpus convention holds and question 7 needs the bisect. **148
+starting positive** means the native path does deliver the mark, and question 7 is
+answered by reading it off. Anything else means something about the receiver changed
+since the original captures and the timing statistics need re-checking before the corpus
+is extended.
 
 ### Open questions the hardware must settle
 

@@ -66,6 +66,54 @@ def parse_pronto(text: str, *, mark_excess_us: int = MARK_EXCESS_MICROS) -> list
     return timings
 
 
+def to_pronto(
+    timings: list[int],
+    *,
+    frequency_code: int = 0x006D,
+    mark_excess_us: int = MARK_EXCESS_MICROS,
+) -> str:
+    """Render signed microseconds as a Pronto code, the exact inverse of parsing.
+
+    New captures have to reach the protocol document in the same form as the
+    original 39, because that document *is* the corpus ``tests/conftest.py``
+    reads. So this reproduces every one of ESPHome's quirks rather than emitting
+    tidier Pronto: the ``(size + 1) // 2`` pair count, the 26us timebase, and the
+    ``MARK_EXCESS_MICROS`` compensation applied in reverse.
+
+    Timings arriving over the native API were never Pronto and so were never
+    compensated. Re-applying the compensation here is what keeps a new block
+    comparable with an old one, so both halves of the corpus decode under a
+    single convention. Any real offset between the two capture paths then shows
+    up as a shift in the timing statistics, where it can be seen, rather than
+    being silently absorbed.
+
+    ``to_pronto(parse_pronto(code)) == code`` exactly. The other direction is
+    lossy by a quantisation step, since an arbitrary microsecond value has to be
+    rounded onto the 26us grid.
+
+    Raises:
+        ValueError: if a duration does not fit Pronto's 16-bit unit field.
+    """
+    timebase = timebase_us(frequency_code)
+
+    units: list[int] = []
+    for index, micros in enumerate(timings):
+        # Element 0 is a space, matching what an ESPHome receive buffer holds.
+        # Undo parse_pronto: it lengthens marks by mark_excess_us and shortens
+        # spaces by it, so a mark gives that back and a space gets it returned.
+        # Folding the sign in covers both, since a space arrives negative.
+        sign = 1 if index % 2 else -1
+        value = round(sign * (micros - mark_excess_us) / timebase)
+        if not 0 <= value <= 0xFFFF:
+            raise ValueError(
+                f"duration {micros}us at index {index} is not representable"
+            )
+        units.append(value)
+
+    header = [0x0000, frequency_code, (len(units) + 1) // 2, 0x0000]
+    return " ".join(f"{word:04X}" for word in header + units)
+
+
 def find_pronto_captures(text: str) -> list[tuple[str, str]]:
     """Pull every ESPHome Pronto capture out of a log or markdown document.
 

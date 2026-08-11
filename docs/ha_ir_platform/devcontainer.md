@@ -107,6 +107,48 @@ npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
 The container's interpreter is `/home/vscode/.local/ha-venv/bin/python`; point the
 VS Code Python extension there.
 
+## Hardware sessions — the KC868-AG and the real remote
+
+For answering the protocol's open questions the devcontainer talks to the real
+device. The KC868-AG must be added **by IP address**: mDNS discovery does not cross
+Docker Desktop's NAT, though outbound API connections to the LAN are fine.
+
+Settings → Devices → Add integration → ESPHome → enter the IP and the encryption
+key. The device's two `ir_rf_proxy` instances arrive as two HA entities.
+Write the receiver's entity id as the `receiver` configuration value of
+`acp35_bench` in `configuration.yaml`:
+
+```yaml
+acp35_bench:
+  receiver: infrared.examplekc868_ag_ir_proxy_receiver
+  journal: /workspaces/acp35/tests/hardware/journal.jsonl
+```
+
+and symlink it in beside the others, exactly as `fake_ir` is:
+
+```bash
+ln -s /workspaces/acp35/tests/custom_components/acp35_bench \
+      ~/src/ha-core/config/custom_components/acp35_bench
+```
+
+The journal path is a *container* path that lands in this repo through the bind
+mount, so the file is readable from Windows and WSL2 while Home Assistant is still
+writing it. It is gitignored: frames worth keeping are promoted into the protocol
+document, and the rest is session noise.
+
+`tools/hw.py` then drives the session from the host. Copy `.env.example` to `.env`
+and fill in a long-lived token from the devcontainer's Home Assistant:
+
+```bash
+uv run python tools/hw.py status                       # is the receiver subscribed
+uv run python tools/hw.py mark "fan button, 3rd press" # label what happens next
+uv run python tools/hw.py journal --since-mark         # decode what it heard
+uv run python tools/hw.py pronto --since-mark          # blocks for the document
+```
+
+Only `mark` needs Home Assistant running; the others read the journal file and work
+with the container stopped.
+
 ## `fake_ir`
 
 Lives at `tests/custom_components/fake_ir/` — it is test support, not a shipped

@@ -9,9 +9,10 @@ dependencies = ["infrared-protocols>=9"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
-# Only needed for `pytest -m hardware`: driving Home Assistant over REST and
-# subscribing to the ESPHome device's logs to capture what its receiver saw.
-hardware = ["aioesphomeapi>=41", "httpx>=0.28"]
+# Only needed for `pytest -m hardware`, which drives Home Assistant over REST.
+# No aioesphomeapi: the acp35_bench component is already inside Home Assistant,
+# so the device is reached through the same API rather than a second connection.
+hardware = ["httpx>=0.28"]
 
 [tool.uv]
 # Nothing here is installable; this repo is tooling, tests and a custom_component

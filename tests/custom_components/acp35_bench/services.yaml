@@ -1,0 +1,13 @@
+mark:
+  name: Mark
+  description: >-
+    Write a label into the capture journal, so the frames that follow can be
+    attributed to the button about to be pressed.
+  fields:
+    label:
+      name: Label
+      description: What is about to be pressed, e.g. "fan, cool 22C, third press".
+      required: true
+      example: fan, cool 22C, third press
+      selector:
+        text:
