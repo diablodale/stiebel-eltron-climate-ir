@@ -29,7 +29,7 @@ from homeassistant.components.climate import (
 from homeassistant.components.climate import (
     DOMAIN as CLIMATE_DOMAIN,
 )
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE, SERVICE_TURN_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
@@ -71,6 +71,18 @@ async def setup_real_chain(hass: HomeAssistant) -> MockConfigEntry:
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+
+    # Power on: the remote ignores everything but power and timer while off, so
+    # the card offers no fan or temperature control until the unit is running.
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: CLIMATE_ID},
+        blocking=True,
+    )
+    # Powering on is itself a send. Clear it so counts describe the test's own
+    # traffic, mirroring send_command.reset_mock() in the mocked fixture.
+    hass.data[DATA_SENT].clear()
     return entry
 
 
@@ -133,10 +145,12 @@ class TestRealPlatform:
     ) -> None:
         """The real proof: what went out is what we meant to send."""
         await setup_real_chain(hass)
+        # Cool, not dry: dry pins the temperature to the remote's default, so
+        # it cannot carry a setpoint to check the round trip against.
         await hass.services.async_call(
             CLIMATE_DOMAIN,
             SERVICE_SET_HVAC_MODE,
-            {ATTR_ENTITY_ID: CLIMATE_ID, ATTR_HVAC_MODE: HVACMode.DRY},
+            {ATTR_ENTITY_ID: CLIMATE_ID, ATTR_HVAC_MODE: HVACMode.COOL},
             blocking=True,
         )
         await hass.services.async_call(
@@ -150,7 +164,7 @@ class TestRealPlatform:
         assert decoded is not None, "the emitted waveform is not a valid frame"
         assert decoded.celsius == 28
         assert decoded.fahrenheit == 82
-        assert decoded.mode.name == "DRY"
+        assert decoded.mode.name == "COOL"
         assert decoded.power is True
 
     async def test_emitted_bits_match_what_the_real_remote_sent(

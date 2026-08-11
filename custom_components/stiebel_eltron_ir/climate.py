@@ -13,7 +13,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import Acp35ConfigEntry
-from .acp35 import MAX_CELSIUS, MIN_CELSIUS, Acp35Fan, Acp35Flag, Acp35Mode
+from .acp35 import (
+    MAX_CELSIUS,
+    MIN_CELSIUS,
+    Acp35Fan,
+    Acp35Flag,
+    Acp35Mode,
+    effective_fan,
+    effective_temperature,
+)
 from .const import ACP_TO_FAN, FAN_TO_ACP, HVAC_TO_MODE, MODE_TO_HVAC
 from .entity import Acp35Entity
 
@@ -46,26 +54,50 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
         | ClimateEntityFeature.TURN_OFF
     )
 
+    # --- UI OPTION 1 -- under evaluation, not a settled design ---------------
+    # Hide what the remote does not allow: the temperature is only adjustable in
+    # cool, and dry offers only low fan.
+
+    @property
+    @override
+    def supported_features(self) -> ClimateEntityFeature:
+        """Offer only the controls the remote would respond to.
+
+        Cool is the one mode whose up/down buttons change the setpoint. The
+        others hide the number on the remote, so the control does not belong on
+        the card either.
+
+        This is a different rule from `effective_temperature`, which pins dry and
+        auto to 22 C but leaves fan alone because fan transmits cool's setpoint.
+        What a frame *carries* and what the user can *change* are separate
+        questions, and conflating them left the control visible in fan.
+        """
+        features = self._attr_supported_features
+        state = self._data.state
+        if not state.power:
+            # Powered off, the remote responds to two buttons only: power and
+            # timer. Fan, mode, temperature and the unit switch are all ignored,
+            # so there is no frame for them and no control to offer. The timer
+            # is a separate entity and stays available.
+            return features & ~(
+                ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE
+            )
+        if state.mode is not Acp35Mode.COOL:
+            features &= ~ClimateEntityFeature.TARGET_TEMPERATURE
+        return features
+
+    @property
+    @override
+    def fan_modes(self) -> list[str]:
+        """Offer only low in dry, where the remote forces it."""
+        if self._data.state.mode is Acp35Mode.DRY:
+            return [ACP_TO_FAN[Acp35Fan.LOW]]
+        return self._attr_fan_modes
+
     def __init__(self, entry: Acp35ConfigEntry) -> None:
         """Set up the entity."""
         super().__init__(entry)
         self._attr_unique_id = entry.entry_id
-
-    @override
-    async def async_added_to_hass(self) -> None:
-        """Restore the shadow state, since the unit cannot be asked for it."""
-        await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()) is None:
-            return
-
-        state = self._data.state
-        state.power = last.state != HVACMode.OFF
-        if last.state != HVACMode.OFF and last.state in HVAC_TO_MODE:
-            state.mode = HVAC_TO_MODE[HVACMode(last.state)]
-        if (fan := last.attributes.get("fan_mode")) in FAN_TO_ACP:
-            state.fan = FAN_TO_ACP[fan]
-        if (temperature := last.attributes.get(ATTR_TEMPERATURE)) is not None:
-            state.set_celsius(_clamp_celsius(temperature))
 
     @property
     @override
@@ -79,14 +111,33 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
     @property
     @override
     def fan_mode(self) -> str:
-        """Return the current fan speed."""
-        return ACP_TO_FAN.get(self._data.state.fan, self._attr_fan_modes[-1])
+        """Return the speed actually running, which in dry is always low.
+
+        This has to agree with `fan_modes`, which offers only low in dry. When
+        it did not, the card had a value outside its own option list and showed
+        an empty selector.
+
+        Reporting the coerced value is safe because the shadow state is
+        persisted through extra data rather than read back from this attribute.
+        The user's own choice is untouched and returns when they leave dry.
+        """
+        state = self._data.state
+        return ACP_TO_FAN.get(
+            effective_fan(state.mode, state.fan), self._attr_fan_modes[-1]
+        )
 
     @property
     @override
     def target_temperature(self) -> float:
-        """Return the target temperature in degrees Celsius."""
-        return self._data.state.celsius
+        """Return the temperature actually being transmitted.
+
+        Dry and auto are pinned to the remote's default. The control is hidden
+        in those modes so this is rarely displayed, but it must not claim a
+        setpoint no frame carries.
+        """
+        state = self._data.state
+        celsius, _ = effective_temperature(state.mode, state.celsius, state.fahrenheit)
+        return celsius
 
     @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -121,10 +172,16 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
 
     @override
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Set the fan speed."""
+        """Set the fan speed for the mode currently selected.
+
+        Stored against that mode only, as the remote does: changing the speed in
+        cool must not move what fan-only or auto will run at. In dry the store
+        pins it to low, so the only speed the card offers there is also the only
+        one that can be recorded.
+        """
         if (fan := FAN_TO_ACP.get(fan_mode)) is None:
             raise ValueError(f"unsupported fan mode {fan_mode}")
-        self._data.state.fan = fan
+        self._data.state.set_fan(fan)
         await self._async_transmit()
 
     @override

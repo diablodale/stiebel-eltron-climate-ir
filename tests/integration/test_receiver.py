@@ -3,9 +3,16 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.components.climate import ATTR_FAN_MODE, HVACMode
+from homeassistant.components.climate import (
+    ATTR_FAN_MODE,
+    SERVICE_SET_FAN_MODE,
+    SERVICE_SET_HVAC_MODE,
+    SERVICE_SET_TEMPERATURE,
+    HVACMode,
+)
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.infrared import InfraredReceivedSignal
-from homeassistant.const import ATTR_TEMPERATURE
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE, SERVICE_TURN_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
@@ -24,7 +31,7 @@ from custom_components.stiebel_eltron_ir.const import (
 )
 from custom_components.stiebel_eltron_ir.receiver import Acp35ReceiverSync
 
-from .conftest import CLIMATE_ID, EMITTER_ID, TIMER_ID
+from .conftest import CLIMATE_ID, EMITTER_ID, TIMER_ID, last_command
 
 RECEIVER_ID = "infrared.test_receiver"
 
@@ -48,6 +55,14 @@ async def entry_with_receiver(
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+
+    # Power on: the remote ignores everything but power and timer while off.
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: CLIMATE_ID},
+        blocking=True,
+    )
     return config_entry
 
 
@@ -100,6 +115,48 @@ class TestFollowingTheRemote:
         state = hass.states.get(CLIMATE_ID)
         assert state.state == HVACMode.DRY
         assert state.attributes[ATTR_FAN_MODE] == "low"
+
+    async def test_a_speed_is_stored_against_the_mode_the_frame_carries(
+        self, hass: HomeAssistant, entry_with_receiver
+    ) -> None:
+        """The remote stores per mode, so a followed frame must too.
+
+        A frame carrying fan-only at low says what fan-only runs at. It says
+        nothing about cool, which must still be on the speed it was left on.
+        """
+        state = entry_with_receiver.runtime_data.state
+        state.mode = Acp35Mode.COOL
+        state.set_fan(Acp35Fan.MEDIUM)
+
+        deliver(
+            hass,
+            entry_with_receiver,
+            remote_frame(mode=Acp35Mode.FAN, fan=Acp35Fan.LOW),
+        )
+        await hass.async_block_till_done()
+
+        assert state.fan_by_mode[Acp35Mode.FAN] is Acp35Fan.LOW
+        assert state.fan_by_mode[Acp35Mode.COOL] is Acp35Fan.MEDIUM
+
+    async def test_dry_stays_low_however_the_frame_pairs_it(
+        self, hass: HomeAssistant, entry_with_receiver
+    ) -> None:
+        """A frame is whatever was on the wire, not what the remote can emit.
+
+        The decoder accepts b6 = 0x22 -- dry with medium -- because nothing in
+        the frame format forbids it. Following one must not put a speed in dry's
+        slot that no remote press could have produced.
+        """
+        deliver(
+            hass,
+            entry_with_receiver,
+            remote_frame(mode=Acp35Mode.DRY, fan=Acp35Fan.MEDIUM),
+        )
+        await hass.async_block_till_done()
+
+        state = entry_with_receiver.runtime_data.state
+        assert state.fan_by_mode[Acp35Mode.DRY] is Acp35Fan.LOW
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_FAN_MODE] == "low"
 
     async def test_temperature_is_followed(
         self, hass: HomeAssistant, entry_with_receiver
@@ -363,3 +420,80 @@ class TestFlagsAreNotFollowed:
         )
         # A fan change carries no event bit, even though the frame we followed had one.
         assert send_command.await_args.args[2].flags == Acp35Flag.CELSIUS
+
+
+class TestOwnEchoIsIgnored:
+    """The emitter and receiver share a board, so we hear everything we send.
+
+    Applying an echo replaces the shadow state with the contents of the frame,
+    and the frame is not always the state: dry pins the temperature to 22 C and
+    the fan to low. Reported from the live instance, where switching to dry
+    echoed back and destroyed the setpoint and fan speed chosen in cool. No test
+    caught it because the mocked emitter never transmits, so nothing echoes.
+    """
+
+    async def _set(self, hass: HomeAssistant, service: str, **data) -> None:
+        await hass.services.async_call(
+            CLIMATE_DOMAIN, service, {ATTR_ENTITY_ID: CLIMATE_ID, **data}, blocking=True
+        )
+
+    async def test_the_reported_sequence(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """cool 20 C medium, dry, cool -> must still be 20 C and medium."""
+        await self._set(hass, SERVICE_SET_HVAC_MODE, hvac_mode=HVACMode.COOL)
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        await self._set(hass, SERVICE_SET_FAN_MODE, fan_mode="medium")
+
+        await self._set(hass, SERVICE_SET_HVAC_MODE, hvac_mode=HVACMode.DRY)
+        # Replay the frame just transmitted, exactly as the real receiver does.
+        deliver(hass, entry_with_receiver, last_command(send_command))
+
+        await self._set(hass, SERVICE_SET_HVAC_MODE, hvac_mode=HVACMode.COOL)
+        attributes = hass.states.get(CLIMATE_ID).attributes
+        assert attributes[ATTR_TEMPERATURE] == 20
+        assert attributes[ATTR_FAN_MODE] == "medium"
+
+    async def test_a_genuine_remote_press_is_still_applied(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """The guard must not deafen us to the remote it exists to follow."""
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        deliver(hass, entry_with_receiver, remote_frame(celsius=27))
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 27
+
+    async def test_the_window_expires(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """Time-bounded, not a permanent mute on one frame's contents."""
+        from custom_components.stiebel_eltron_ir import ECHO_WINDOW_SECONDS
+
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        sent = last_command(send_command)
+        data = entry_with_receiver.runtime_data
+        # Age every remembered transmission past the window.
+        data._sent = type(data._sent)(
+            (frame, at - ECHO_WINDOW_SECONDS - 1) for frame, at in data._sent
+        )
+
+        deliver(hass, entry_with_receiver, sent)
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 20
+
+    async def test_an_earlier_echo_is_still_recognised(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """Echoes arrive ~100 ms late, so a burst outruns a one-frame memory.
+
+        With a single remembered frame, the first echo no longer matches by the
+        time it lands and is applied as though the remote had sent it.
+        """
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        first = last_command(send_command)
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=26)
+        second = last_command(send_command)
+
+        # Both echoes arrive after both commands were sent, oldest first.
+        deliver(hass, entry_with_receiver, first)
+        deliver(hass, entry_with_receiver, second)
+
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 26

@@ -12,8 +12,13 @@ from homeassistant.core import CALLBACK_TYPE
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from . import Acp35ConfigEntry, Acp35Data
-from .acp35 import Acp35Command, Acp35Flag
+from . import Acp35ConfigEntry, Acp35Data, Acp35RestoreData
+from .acp35 import (
+    Acp35Command,
+    Acp35Flag,
+    effective_fan,
+    effective_temperature,
+)
 from .const import DOMAIN
 
 
@@ -36,10 +41,29 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
             name=entry.title,
         )
 
+    @property
+    @override
+    def extra_restore_state_data(self) -> Acp35RestoreData:
+        """Persist the whole shadow state, not just what this entity shows."""
+        return Acp35RestoreData.from_state(self._data.state)
+
+    async def _async_restore_shared_state(self) -> None:
+        """Load the shadow state from extra data, if there is any."""
+        if (extra := await self.async_get_last_extra_data()) is None:
+            return
+        if (restored := Acp35RestoreData.from_dict(extra.as_dict())) is not None:
+            restored.apply(self._data.state)
+
     @override
     async def async_added_to_hass(self) -> None:
-        """Track the emitter and follow state changes made by sibling entities."""
+        """Restore the shadow state, track the emitter, follow sibling changes.
+
+        The unit cannot be asked what it is doing, so the state has to come back
+        from storage. Both entities restore it: they hold the same object and
+        write the same snapshot, and entity add order is not guaranteed.
+        """
         await super().async_added_to_hass()
+        await self._async_restore_shared_state()
         # Keep one reference to the bound method. Every `self._handle_shared_update`
         # builds a fresh bound-method object, so the identity check that stops us
         # notifying ourselves in _async_transmit would never match otherwise.
@@ -57,29 +81,43 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         changed, mirroring what the remote emits. Whether the unit needs the
         event bits at all is untested; if it turns out not to, every caller can
         simply stop passing one.
+
+        Every bit but the display unit is an event, ``TIMER_UI`` included, so
+        each is passed in by the setter that caused it rather than derived from
+        the state. Deriving it was a bug: a capture of the remote with a timer
+        counting down shows ``b7`` bit 1 clear on an ordinary fan press, so the
+        bit means the entry display is open, not that a timer is pending.
         """
         state = self._data.state
         flags = event
         if self._data.display_celsius:
             flags |= Acp35Flag.CELSIUS
-        if state.timer_hours:
-            flags |= Acp35Flag.TIMER_UI
 
+        celsius, fahrenheit = effective_temperature(
+            state.mode, state.celsius, state.fahrenheit
+        )
         return Acp35Command(
             power=state.power,
             mode=state.mode,
-            fan=state.fan,
+            # Dry forces low on the remote, and dry and auto pin the temperature
+            # to the default. The shadow state keeps whatever the user picked so
+            # it comes back when they return to a mode that uses it.
+            fan=effective_fan(state.mode, state.fan),
             # Both fields go verbatim. Passing only Celsius would re-derive the
             # Fahrenheit one, which shifts a unit displaying °F by a degree
             # whenever the two mappings disagree, as they do at 63 °F.
-            celsius=state.celsius,
-            fahrenheit=state.fahrenheit,
+            celsius=celsius,
+            fahrenheit=fahrenheit,
             timer_hours=state.timer_hours,
             flags=flags,
         )
 
     async def _async_transmit(self, event: Acp35Flag = Acp35Flag.NONE) -> None:
         """Send the current shared state, then refresh every entity."""
-        await self._send_command(self._build_command(event))
+        command = self._build_command(event)
+        # Note it before sending: our own receiver hears this frame and must not
+        # apply it back over the state that produced it.
+        self._data.async_note_transmission(command.to_bytes())
+        await self._send_command(command)
         self.async_write_ha_state()
         self._data.async_notify(self._listener)

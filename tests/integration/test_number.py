@@ -76,16 +76,51 @@ class TestTransmission:
     async def test_arming_sets_the_timer_ui_flag(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
-        # The remote sets b7 bit 1 on the frames it sends while the timer is set.
+        # The remote sets b7 bit 1 on every frame it emits while the entry
+        # display is open, and the last of those commits the value.
         await set_hours(hass, 3)
         assert Acp35Flag.TIMER_UI in last_command(send_command).flags
 
     async def test_disarming_clears_the_timer_ui_flag(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
+        # Reproduces the remote's TIMER-then-TIMER cancel, which disarms with no
+        # event bit, rather than its wind-down-to-zero, which stays armed at 0 h.
         await set_hours(hass, 3)
         await set_hours(hass, 0)
         assert Acp35Flag.TIMER_UI not in last_command(send_command).flags
+        assert last_command(send_command).timer_armed is False
+
+    async def test_other_entities_do_not_carry_the_timer_ui_flag(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """A pending timer must not put b7 bit 1 on somebody else's frame.
+
+        This was a real bug. `_build_command` derived the flag from
+        `timer_hours > 0`, so every mode, fan and temperature change made while
+        a timer counted down claimed the entry display was open. A capture of
+        the remote with 3 hours pending shows b7 bit 1 clear on an ordinary fan
+        press, so the bit reports the display, not the timer.
+        """
+        from homeassistant.components.climate import (
+            DOMAIN as CLIMATE_DOMAIN,
+        )
+        from homeassistant.components.climate import (
+            SERVICE_SET_FAN_MODE,
+        )
+
+        await set_hours(hass, 3)
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            SERVICE_SET_FAN_MODE,
+            {ATTR_ENTITY_ID: CLIMATE_ID, "fan_mode": "high"},
+            blocking=True,
+        )
+
+        command = last_command(send_command)
+        assert Acp35Flag.TIMER_UI not in command.flags
+        assert command.timer_hours == 3, "the timer itself must survive"
+        assert command.timer_armed is True
 
     @pytest.mark.parametrize("hours", [-1, 25, 100])
     async def test_out_of_range_is_rejected_by_home_assistant(

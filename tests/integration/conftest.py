@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
+from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
@@ -75,6 +77,18 @@ async def entry(
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+
+    # Power on. The shadow state starts off, and the remote ignores every button
+    # but power and timer while off, so a test that sets a fan speed or a
+    # temperature from the default state is exercising something the hardware
+    # cannot do. Tests about the off behaviour turn it off explicitly.
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: CLIMATE_ID},
+        blocking=True,
+    )
+    send_command.reset_mock()
     return config_entry
 
 

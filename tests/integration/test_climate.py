@@ -24,12 +24,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.stiebel_eltron_ir.acp35 import (
+    DEFAULT_CELSIUS,
     Acp35Fan,
     Acp35Flag,
     Acp35Mode,
 )
 
-from .conftest import CLIMATE_ID, last_command
+from .conftest import CLIMATE_ID, TIMER_ID, last_command
 
 
 async def call(hass: HomeAssistant, service: str, **data) -> None:
@@ -221,14 +222,396 @@ class TestRestore:
     async def test_state_is_restored(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
-        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        # Choose the temperature and fan in cool, where both are adjustable,
+        # then move to dry. Dry offers neither control.
         await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "low"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert hass.states.get(CLIMATE_ID).state == HVACMode.DRY
+
+        # Assert through the transmitted frame rather than the attributes: the
+        # card hides the temperature outside cool, so reading it back from the
+        # state would test the display rather than what survived the restart.
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        command = last_command(send_command)
+        assert command.celsius == 28
+        assert command.fan is Acp35Fan.LOW
+
+    async def test_every_mode_keeps_its_own_speed(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """All four slots survive, not just the one the selected mode uses.
+
+        Persisting only the current speed would hand every other mode whatever
+        the last-used one was running the next time it is selected.
+        """
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "medium"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.FAN_ONLY})
         await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "low"})
 
         await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
 
-        state = hass.states.get(CLIMATE_ID)
-        assert state.state == HVACMode.DRY
-        assert state.attributes[ATTR_TEMPERATURE] == 28
-        assert state.attributes[ATTR_FAN_MODE] == "low"
+        for mode, expected in (
+            (HVACMode.COOL, Acp35Fan.MEDIUM),
+            (HVACMode.FAN_ONLY, Acp35Fan.LOW),
+            (HVACMode.AUTO, Acp35Fan.HIGH),
+        ):
+            await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+            assert last_command(send_command).fan is expected
+
+
+class TestDryForcesLowFan:
+    """Dry mode forces the fan to low, as the remote does.
+
+    Selecting dry on the TZ20160122 drops the fan to low and the fan button will
+    not move it while dry is selected, so no frame the remote can emit pairs dry
+    with medium or high. Whether the unit would accept one is untested, which is
+    why this mirrors the remote rather than assuming the handset alone enforces
+    it.
+    """
+
+    @pytest.mark.parametrize("chosen", ["low", "medium", "high"])
+    async def test_dry_always_transmits_low(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, chosen: str
+    ) -> None:
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: chosen})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+
+        command = last_command(send_command)
+        assert command.mode is Acp35Mode.DRY
+        assert command.fan is Acp35Fan.LOW
+        assert command.to_bytes()[6] == 0x12
+
+    async def test_a_non_low_fan_cannot_be_selected_during_dry(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Home Assistant refuses a speed that is not in fan_modes."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        send_command.reset_mock()
+        with pytest.raises(ServiceValidationError):
+            await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+        assert send_command.await_count == 0
+
+    async def test_the_reported_speed_agrees_with_the_offered_options(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """A value outside fan_modes leaves the card's selector blank."""
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+
+        attributes = hass.states.get(CLIMATE_ID).attributes
+        assert attributes[ATTR_FAN_MODE] == "low"
+        assert attributes[ATTR_FAN_MODE] in attributes["fan_modes"]
+        assert last_command(send_command).fan is Acp35Fan.LOW
+
+    async def test_selecting_low_in_dry_does_not_overwrite_the_stored_speed(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Reported: off, cool+medium, dry, select low, cool -> must be medium.
+
+        Low is the only option dry offers, so choosing it is not a choice. It
+        must not replace the speed the other modes remember.
+        """
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "medium"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "low"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+
+        assert last_command(send_command).fan is Acp35Fan.MEDIUM
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_FAN_MODE] == "medium"
+
+    async def test_leaving_dry_restores_the_chosen_speed(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """The user's pick is kept, not flattened to low by passing through dry."""
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+
+        command = last_command(send_command)
+        assert command.mode is Acp35Mode.COOL
+        assert command.fan is Acp35Fan.HIGH
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_FAN_MODE] == "high"
+
+
+class TestFanSpeedIsStoredPerMode:
+    """Each mode remembers its own speed, exactly as the remote does.
+
+    A mode press transmits the speed stored for the mode being entered, not the
+    speed the previous mode was running. Pulling the remote's batteries brings
+    every mode back on high except dry, which returns on low, so that is where
+    each slot starts.
+    """
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            (HVACMode.AUTO, Acp35Fan.HIGH),
+            (HVACMode.COOL, Acp35Fan.HIGH),
+            (HVACMode.DRY, Acp35Fan.LOW),
+            (HVACMode.FAN_ONLY, Acp35Fan.HIGH),
+        ],
+    )
+    async def test_each_mode_starts_where_the_remote_does(
+        self,
+        hass: HomeAssistant,
+        entry,
+        send_command: AsyncMock,
+        mode: HVACMode,
+        expected: Acp35Fan,
+    ) -> None:
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+        assert last_command(send_command).fan is expected
+
+    async def test_a_speed_set_in_cool_does_not_follow_into_other_modes(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Reported: cool+medium then auto or fan-only must not run medium."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "medium"})
+
+        for mode in (HVACMode.AUTO, HVACMode.FAN_ONLY):
+            await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+            assert last_command(send_command).fan is Acp35Fan.HIGH
+
+    async def test_returning_to_a_mode_restores_its_own_speed(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "medium"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.FAN_ONLY})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "low"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+
+        assert last_command(send_command).fan is Acp35Fan.MEDIUM
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_FAN_MODE] == "medium"
+
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.FAN_ONLY})
+        assert last_command(send_command).fan is Acp35Fan.LOW
+
+    @pytest.mark.parametrize("mode", [HVACMode.AUTO, HVACMode.FAN_ONLY])
+    async def test_all_three_speeds_are_offered_outside_dry(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, mode: HVACMode
+    ) -> None:
+        """Auto and fan-only accept every speed; only dry is restricted."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+        assert hass.states.get(CLIMATE_ID).attributes["fan_modes"] == [
+            "low",
+            "medium",
+            "high",
+        ]
+
+        for chosen, expected in (
+            ("low", Acp35Fan.LOW),
+            ("medium", Acp35Fan.MEDIUM),
+            ("high", Acp35Fan.HIGH),
+        ):
+            await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: chosen})
+            assert last_command(send_command).fan is expected
+
+
+class TestOnlyCoolHasASetpoint:
+    """Dry and auto are pinned to the remote's default temperature.
+
+    The remote hides the temperature in every mode but cool and up/down will not
+    change it there, so dry and auto always carry 22 C / 72 F. That 22 is
+    firmware, not stored state: after the batteries were pulled the remote came
+    back at 22 C in every mode, while during a session cool moved to 30 C and
+    later 18 C with dry and auto unmoved.
+    """
+
+    @pytest.mark.parametrize("mode", [HVACMode.DRY, HVACMode.AUTO])
+    async def test_pinned_modes_transmit_the_default(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, mode: HVACMode
+    ) -> None:
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+
+        command = last_command(send_command)
+        assert command.celsius == DEFAULT_CELSIUS
+        assert command.fahrenheit == 72, "b3 must stay paired with b1"
+
+    @pytest.mark.parametrize("mode", [HVACMode.COOL, HVACMode.FAN_ONLY])
+    async def test_cool_and_fan_carry_the_setpoint(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, mode: HVACMode
+    ) -> None:
+        """Fan mirrors cool's setpoint on the remote, so it is not pinned."""
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+        assert last_command(send_command).celsius == 28
+
+    async def test_leaving_a_pinned_mode_restores_the_setpoint(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+
+        assert last_command(send_command).celsius == 28
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 28
+
+    async def test_the_setpoint_is_kept_while_a_pinned_mode_is_selected(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Dry transmits the default, then cool transmits the choice again."""
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        assert last_command(send_command).celsius == DEFAULT_CELSIUS
+
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        assert last_command(send_command).celsius == 28
+
+    async def test_a_restart_while_pinned_keeps_the_setpoint(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """The regression that reporting the pinned value would have caused."""
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 28})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Extra data is what makes this pass. Restoring from the displayed
+        # attributes could not: the card hides the temperature in dry, so a
+        # restart taken there would read back the pinned 22 and keep it.
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        command = last_command(send_command)
+        assert command.celsius == 28, "the setpoint must survive a restart in dry"
+        assert command.fan is Acp35Fan.HIGH, "the fan choice must survive it too"
+
+    async def test_factory_defaults_match_the_reset_capture(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """A freshly reset remote sends cool, high fan, 22 C, °C display."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+        await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: DEFAULT_CELSIUS})
+
+        state = last_command(send_command).to_bytes()
+        assert state[:8].hex(" ") == "55 62 00 0d 00 00 31 c0"
+
+
+class TestModeDependentControls:
+    """UI option 1, under evaluation: hide what the remote does not allow.
+
+    The temperature is adjustable only in cool. Fan mode transmits cool's
+    setpoint, but the remote still hides the number there, so what a frame
+    carries and what the user can change are separate questions.
+    """
+
+    @pytest.mark.parametrize(
+        ("mode", "adjustable"),
+        [
+            (HVACMode.COOL, True),
+            (HVACMode.FAN_ONLY, False),
+            (HVACMode.DRY, False),
+            (HVACMode.AUTO, False),
+        ],
+    )
+    async def test_temperature_control_is_offered_only_in_cool(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, mode, adjustable
+    ) -> None:
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+        attributes = hass.states.get(CLIMATE_ID).attributes
+        assert (ATTR_TEMPERATURE in attributes) is adjustable
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            (HVACMode.COOL, ["low", "medium", "high"]),
+            (HVACMode.DRY, ["low"]),
+            (HVACMode.AUTO, ["low", "medium", "high"]),
+            (HVACMode.FAN_ONLY, ["low", "medium", "high"]),
+        ],
+    )
+    async def test_only_dry_narrows_the_fan_choices(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, mode, expected
+    ) -> None:
+        # The manual states auto takes a fan speed, so only dry is restricted.
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: mode})
+        assert hass.states.get(CLIMATE_ID).attributes["fan_modes"] == expected
+
+    async def test_setting_temperature_outside_cool_is_refused(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """A script that sets a temperature in dry fails instead of being ignored."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.DRY})
+        send_command.reset_mock()
+        with pytest.raises(ServiceValidationError):
+            await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 25})
+        assert send_command.await_count == 0
+
+
+class TestPoweredOffIgnoresControls:
+    """Off, the remote responds to power and timer only.
+
+    Every other button is ignored, so no frame exists for a fan or temperature
+    change made while off. Offering those controls invents an interaction the
+    hardware does not have, and the invented value then leaks into the next
+    power-on.
+    """
+
+    async def test_the_reported_sequence(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """cool+medium, off, fan=high, cool -> must still be medium."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "medium"})
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
+
+        with pytest.raises(ServiceValidationError):
+            await call(hass, SERVICE_SET_FAN_MODE, **{ATTR_FAN_MODE: "high"})
+
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.COOL})
+        assert last_command(send_command).fan is Acp35Fan.MEDIUM
+
+    async def test_neither_control_is_offered_while_off(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
+        attributes = hass.states.get(CLIMATE_ID).attributes
+        assert ATTR_TEMPERATURE not in attributes
+        assert attributes.get("fan_modes") is None
+
+    async def test_setting_temperature_while_off_is_refused(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
+        send_command.reset_mock()
+        with pytest.raises(ServiceValidationError):
+            await call(hass, SERVICE_SET_TEMPERATURE, **{ATTR_TEMPERATURE: 25})
+        assert send_command.await_count == 0
+
+    async def test_powering_on_still_works(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Power is one of the two buttons that does respond."""
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
+        await call(hass, SERVICE_TURN_ON)
+        assert last_command(send_command).power is True
+
+    async def test_the_timer_still_works_while_off(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """The other responding button. The manual gives it a switch-on delay."""
+        from homeassistant.components.number import ATTR_VALUE, SERVICE_SET_VALUE
+        from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+
+        await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
+        await hass.services.async_call(
+            NUMBER_DOMAIN,
+            SERVICE_SET_VALUE,
+            {ATTR_ENTITY_ID: TIMER_ID, ATTR_VALUE: 5},
+            blocking=True,
+        )
+        command = last_command(send_command)
+        assert command.timer_hours == 5
+        assert command.power is False, "the timer must not power the unit on"

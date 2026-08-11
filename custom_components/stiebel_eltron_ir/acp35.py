@@ -65,6 +65,11 @@ MIN_FAHRENHEIT = 62
 MAX_FAHRENHEIT = 86
 MAX_TIMER_HOURS = 24
 
+# The temperature every mode starts at, and the one dry and auto never leave.
+# Confirmed as firmware rather than stored state: the remote came back at 22 C in
+# every mode after its batteries were removed.
+DEFAULT_CELSIUS = 22
+
 _CELSIUS_BIAS = 16
 _FAHRENHEIT_BIAS = 59
 _TIMER_ARMED_MASK = 0x08
@@ -78,39 +83,40 @@ _POWER_MASK = 0x02
 # 63 F pairs back to 17 C -- so deriving either side from the other by formula
 # would quietly assert a symmetry that does not exist.
 #
-# Entries marked (v) are confirmed by a capture in the protocol document. The
-# corpus test test_temperature_fields_agree checks every capture against these
-# tables, so adding captures to the document verifies more entries with no code
-# change. Sweeping the remote through its full Fahrenheit range would confirm
-# the 19 unverified entries below.
+# Every entry in both tables is confirmed by a capture in the protocol document.
+# A sweep of the remote through its full range in each display unit produced all
+# 25 Fahrenheit and all 14 Celsius values with no disagreement, so nothing here
+# is inference. The corpus test test_temperature_fields_agree re-checks every
+# capture against these tables on each run.
 
-# All 14 confirmed. Equals round(C * 9/5 + 32) at every entry except 17 C, which
-# ships as 62 F rather than the 63 F rounding gives: the bottom of the Celsius
-# scale is pinned to the bottom of the Fahrenheit one. Not floor() -- that would
-# also change 21, 22, 26 and 27 C, and the captures show it does not.
+# Equals round(C * 9/5 + 32) at every entry except 17 C, which ships as 62 F
+# rather than the 63 F rounding gives: the bottom of the Celsius scale is pinned
+# to the bottom of the Fahrenheit one. Not floor() -- that would also change 21,
+# 22, 26 and 27 C, and the captures show it does not.
 _CELSIUS_TO_FAHRENHEIT = {
-    17: 62,  # (v)
-    18: 64,  # (v)
-    19: 66,  # (v)
-    20: 68,  # (v)
-    21: 70,  # (v)
-    22: 72,  # (v)
-    23: 73,  # (v)
-    24: 75,  # (v)
-    25: 77,  # (v)
-    26: 79,  # (v)
-    27: 81,  # (v)
-    28: 82,  # (v)
-    29: 84,  # (v)
-    30: 86,  # (v)
+    17: 62,
+    18: 64,
+    19: 66,
+    20: 68,
+    21: 70,
+    22: 72,
+    23: 73,
+    24: 75,
+    25: 77,
+    26: 79,
+    27: 81,
+    28: 82,
+    29: 84,
+    30: 86,
 }
 
-# 6 of 25 confirmed. Equals round((F - 32) * 5/9) at every entry, including all
-# six confirmed ones; the remaining 19 follow that same rule and are unverified.
+# Equals round((F - 32) * 5/9) at every entry, with no pinning needed: 62 F
+# already rounds to 17 C. This is the direction that makes the two tables
+# non-inverse, since 17 C leaves as 62 F but 63 F also arrives as 17 C.
 _FAHRENHEIT_TO_CELSIUS = {
-    62: 17,  # (v)
-    63: 17,  # (v)
-    64: 18,  # (v)
+    62: 17,
+    63: 17,
+    64: 18,
     65: 18,
     66: 19,
     67: 19,
@@ -118,10 +124,10 @@ _FAHRENHEIT_TO_CELSIUS = {
     69: 21,
     70: 21,
     71: 22,
-    72: 22,  # (v)
+    72: 22,
     73: 23,
     74: 23,
-    75: 24,  # (v)
+    75: 24,
     76: 24,
     77: 25,
     78: 26,
@@ -132,7 +138,7 @@ _FAHRENHEIT_TO_CELSIUS = {
     83: 28,
     84: 29,
     85: 29,
-    86: 30,  # (v)
+    86: 30,
 }
 
 
@@ -167,19 +173,58 @@ class Acp35Flag(IntFlag):
     frame: 0xC0 after a temperature press, 0x80 after a fan or mode press, 0x88
     after a power press.
 
+    TEMP_CHANGED is narrower than either "the button" or "the value": a mode
+    press changes the transmitted temperature without setting it, and up/down
+    inside the timer display changes the hours without setting it. It marks an
+    up/down press that moved the setpoint.
+
     Whether the unit actually requires the event bits, or acts on b1/b2/b3/b6
     regardless, is untested. Until that is known, reproduce what the remote sends.
     """
 
     NONE = 0
-    TIMER_UI = 0x02  # remote is in its timer-entry UI
+    TIMER_REOPENED = 0x01  # TIMER opened the entry display on a running timer
+    TIMER_UI = 0x02  # the timer-entry display is open
     POWER_PRESSED = 0x08  # frame came from the power button, on or off
-    TEMP_CHANGED = 0x40  # frame came from a temperature up/down press
+    TEMP_CHANGED = 0x40  # an up/down press changed the temperature setpoint
     CELSIUS = 0x80  # display unit; the one genuinely persistent bit
 
-    # Bit 0 (0x01) appears in exactly one capture, as part of 0x03 on the first
-    # press of a timer cancel. Unexplained. IntFlag keeps unnamed bits, so it
-    # survives a decode/encode round trip.
+    # Bits 5, 4 and 2 are never set. The remote has seven buttons and every one
+    # has now been captured, so this is evidenced rather than assumed: no press
+    # exists that could set them.
+
+
+def effective_temperature(
+    mode: Acp35Mode, celsius: int, fahrenheit: int
+) -> tuple[int, int]:
+    """Return the temperature pair the remote would transmit for this mode.
+
+    Only cool has a setpoint. The remote hides the number in the other three and
+    up/down will not change it, so dry and auto always carry the default of
+    22 C / 72 F, and fan carries whatever cool is set to.
+
+    That 22 is firmware, not stored state: after the batteries were removed the
+    remote came back at 22 C in every mode. Cool moved to 30 C and later 18 C
+    across a capture session while dry and auto stayed at 22 throughout.
+    """
+    if mode in (Acp35Mode.DRY, Acp35Mode.AUTO):
+        return DEFAULT_CELSIUS, _CELSIUS_TO_FAHRENHEIT[DEFAULT_CELSIUS]
+    return celsius, fahrenheit
+
+
+def effective_fan(mode: Acp35Mode, fan: Acp35Fan) -> Acp35Fan:
+    """Return the fan speed the remote would actually transmit for this mode.
+
+    Selecting dry on the remote forces the fan to low, and the fan button will
+    not move it while dry is selected. A frame pairing dry with medium or high is
+    therefore one the remote is incapable of emitting.
+
+    Whether the *unit* would accept such a frame is untested, so this mirrors the
+    remote rather than assuming the restriction is only in the handset. Callers
+    keep the user's chosen speed in their own state and pass it here on the way
+    out, so leaving dry restores it rather than silently flattening it to low.
+    """
+    return Acp35Fan.LOW if mode is Acp35Mode.DRY else fan
 
 
 def celsius_to_fahrenheit(celsius: int) -> int:

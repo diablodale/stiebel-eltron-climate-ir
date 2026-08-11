@@ -16,7 +16,7 @@ PROTOCOL_DOC = REPO_ROOT / "Stiebel Eltron air conditioner ACP 35.md"
 
 # Every capture is 151 Pronto words: 4 header words plus 147 durations.
 EXPECTED_WORDS = 151
-EXPECTED_CAPTURES = 39
+EXPECTED_CAPTURES = 70
 
 
 @dataclass(frozen=True)

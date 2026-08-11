@@ -403,6 +403,31 @@ writes it, so using the original remote no longer desyncs HA; on a non-match it 
 silently. Subscribing directly, rather than also inheriting `InfraredReceiverConsumerEntity`,
 avoids a diamond over `InfraredConsumerEntity`.
 
+## Deferred work
+
+Decided but not scheduled. Each is independent of the open hardware questions.
+
+### The display-unit checkbox should not be a setup question
+
+`CONF_DISPLAY_CELSIUS` appears in the config flow as "Air conditioner displays
+Celsius". Three problems, in increasing order of importance:
+
+- **The label describes state but the field is an instruction.** It sets `b7`
+  bit 7 on everything we transmit, so it does not report what the unit is
+  showing, it decides what the unit *will* show. "Set the air conditioner's
+  display to Celsius" is what it does.
+- **The hardware already answers it.** `receiver.py` overwrites
+  `display_celsius` from any frame the receiver hears, so with a receiver
+  configured the setup answer is replaced the first time anyone touches the
+  remote. Asking at setup time for something discoverable seconds later is a
+  question worth not asking.
+- **It cannot be changed afterwards.** It is config-entry data with no options
+  flow, so a user without a receiver who picks wrong has to delete and re-add the
+  integration.
+
+Intended shape: default `True`, drop it from the initial step, and expose it
+through an options flow for the no-receiver case.
+
 ## Verification
 
 **Everything is a pytest test**, including the hardware steps. Nothing is a prose checklist
@@ -526,9 +551,8 @@ identifies the winner instead of five separate confirmations.
 | `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and looks in the bench journal for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the journalled frame decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |
 | `tests/hardware/test_receiver_sync.py` | `hardware, manual` | — | Not a question: end-to-end proof of Phase 5. Skips unless the device exposes a receiver entity, prompts for a press on the physical remote, asserts the climate entity followed. A companion case clears the receiver and asserts climate + timer still work |
 
-Questions 1–6 have no module here; they are capture exercises rather than tests, for
-the reason given below the first question group. They run through the bench and
-`tools/hw.py` instead.
+Questions 1–6 needed no module here: they were capture exercises, run through
+`acp35_bench` and `tools/hw.py`, and are answered.
 
 On the loopback test specifically: the receiver sits centimetres from the emitting LED and
 will likely saturate. A *decode failure* is therefore inconclusive, not a bug — the fixture
@@ -551,6 +575,55 @@ answered by reading it off. Anything else means something about the receiver cha
 since the original captures and the timing statistics need re-checking before the corpus
 is extended.
 
+### Power the device independently before any transmit test
+
+The KC868-AG was plugged into the development PC's USB port. Transmitting drops
+the rail far enough to re-enumerate the board's CH340 USB-serial bridge — Windows
+plays its device-arrival chime and Device Manager flickers — while the ESP32
+keeps running, so Home Assistant sees no disconnect and the device's own console
+log stays silent. It is intermittent: two chimes in three transmits.
+
+The chime is cosmetic. The corruption is not. Of 24 of our own frames heard back
+through the receiver, **one arrived truncated to 144 durations instead of 148**,
+a 4% failure rate. All 132 frames from the battery-powered remote were intact.
+
+Every question from 7 onward asks "did the unit respond?", and a supply that
+mangles one frame in twenty-five makes a "no" ambiguous between *wrong header
+mark* and *the LED browned out mid-frame*. Question 9 would be measuring the
+power supply rather than the air conditioner.
+
+**Resolved 2026-08-11: the device now runs from its own supply.** 72 further
+transmits produced no truncation at all, against 1 in 24 before. One frame of the
+72 came back at 150 durations, but that is a different fault: elements 138-140
+were 189, -233, 189 us, and they sum to 611 -- a single bit mark split in three by
+a spurious edge. That is the receiver mis-sampling a good transmission, not a
+damaged one, and it is the same ambient infrared that fills the journal with
+two-element noise bursts.
+
+Keep the distinction when reading results. A truncated *transmission* means the
+unit got a broken frame and its silence says nothing. A *receive* glitch means the
+unit got a good frame and only our recording of it is damaged, so the test can
+simply be repeated.
+
+### The loopback works, and it detects bad transmissions
+
+The plan assumed `test_loopback.py` would usually skip: receiver centimetres from
+the emitting LED, saturating, nothing decodable. It does not saturate. Our own
+transmissions come back cleanly at 148 durations, which makes question 10
+answerable and gives every other transmit test a free integrity check — a frame
+that does not return as exactly 148 durations was not sent properly and must be
+discarded rather than counted as an answer.
+
+Two consequences for the encoder, both open:
+
+- **Our frames are 148 durations where the remote's are 147**, and the extra one
+  is our leading `HEADER_MARK`. The receiver captures a leading mark when there
+  is one to capture, so the remote does not appear to send one at all. This is
+  the strongest evidence yet on question 7 and may mean `HEADER_MARK = 0`.
+- **`from_raw_timings()` cannot decode our own transmissions.** It tolerates a
+  missing leading mark but not an extra one, so every loopback frame decodes as
+  `None`. Fix before question 10 can assert anything.
+
 ### Open questions the hardware must settle
 
 Accumulated across Phases 3–5. Each one is a place where the code had to assume
@@ -563,25 +636,47 @@ Within a group they are ordered by what unblocks what, and by what is cheapest t
 learn first. The subsections below appear in the same order and expand the ones that
 need a procedure rather than a single press.
 
-**Questions 1–6: point the receiver at the original remote.** No transmitting, so
-nothing here can confuse the air conditioner and none of it waits on question 7.
-This is the whole of the work that can be done in an evening with the TZ20160122 and
-the KC868-AG, and it needs no new test code — the frames go into the protocol
-document and `tests/test_captures.py` picks them up.
+Group one is answered. Groups two and three all need the ACP 35 itself.
 
-| # | Question | Run by | What currently assumes an answer |
-| - | -------- | ------ | -------------------------------- |
-| 1 | The 19 unverified °F → °C pairings | into the doc | `_FAHRENHEIT_TO_CELSIUS` in `acp35.py`, marked `(v)` where evidenced |
-| 2 | Does any remote button set `b4`, `b5`, or `b7` bits 5/4/2? | into the doc | that they are reserved and safe to send as `0` |
-| 3 | Does the remote ever emit fan `0`? | into the doc | `Acp35Fan.AUTO` exists but is not offered in `fan_modes` |
-| 4 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running, or only while the entry UI is open? | into the doc | `_build_command` derives it from `timer_hours > 0`, which may set it too often |
-| 5 | Do `b1` bit 3 and `b2` survive a non-timer press? | into the doc | that the shadow state can hold the timer across other changes |
-| 6 | What `b7` bit 0 means | into the doc | nothing — it is decoded and preserved, never generated |
+**Questions 1–6: ANSWERED 2026-08-11.** One session with the TZ20160122 and the
+KC868-AG, no transmitting and no air conditioner. 128 frames, every checksum valid;
+31 of them are now Pronto blocks in the protocol document, where
+`tests/test_captures.py` reads them.
 
-Why this order: 1 is the largest evidence gap and the °F path is user-visible, 2 is a
-single systematic pass over the remote, and 3 falls out of that same pass for free.
-4 and 5 are the two timer answers the encoder actually depends on, and 6 is last
-because nothing in the code rests on it — it is an unexplained bit, not an assumption.
+| # | Question | Answer |
+| - | -------- | ------ |
+| 1 | The 19 unverified °F → °C pairings | **All 25 confirmed**, plus all 14 °C → °F. Both tables are now fully evidenced and the `(v)` markers are gone. |
+| 2 | Does any remote button set `b4`, `b5`, or `b7` bits 5/4/2? | **No.** The remote has exactly seven buttons and all seven were captured, so "reserved" is now evidenced rather than assumed. |
+| 3 | Does the remote ever emit fan `0`? | **No.** The fan button cycles high → medium → low over a full lap and a repeat. `Acp35Fan.AUTO` stays out of `fan_modes`. |
+| 4 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running? | **No** — the bit reports the entry display, not a pending timer. `_build_command` was wrong and is fixed. |
+| 5 | Do `b1` bit 3 and `b2` survive a non-timer press? | **Yes.** Both survive; the shadow state may hold the timer across other changes. |
+| 6 | What `b7` bit 0 means | **A TIMER press that reopened the display on a timer already set.** Identical at 5 h and 7 h, so it does not encode the hours. |
+
+Three things turned up that were not asked about:
+
+- **There is one temperature setpoint and cool owns it.** Fan mode mirrors it; dry and
+  auto transmit a fixed 22 °C. Fan *speed* is genuinely per-mode. Pulling the remote's
+  batteries showed 22 °C is the firmware default rather than stored state, so
+  `effective_temperature()` pins dry and auto to it, exactly as `effective_fan()` pins
+  dry to low.
+- **Dry forces low fan, and it is not a stored preference.** After a battery reset every
+  mode came up on high except dry, which came up low. Operating the remote confirmed the
+  other three modes each accept low, medium and high, so dry is the only restriction.
+- **Fan speed is stored per mode, and the integration now stores it the same way.** A mode
+  press transmits the speed stored for the mode being entered. Keeping one shared speed —
+  which is what the integration did — made cool's medium follow into fan-only, where the
+  remote would have sent whatever fan-only was left on. `Acp35State.fan_by_mode` holds all
+  four slots and every one is persisted, so a restart does not collapse them.
+- **Off, the remote answers only power and timer.** Every other button is ignored. The
+  climate entity now drops both `TARGET_TEMPERATURE` and `FAN_MODE` while off, which fixes
+  a reported bug: a fan speed set while off used to survive into the next power-on and
+  replace the speed chosen before.
+- **`b7` bit 6 is narrower than documented.** It means an up/down press that moved the
+  setpoint — not the button alone, and not the value alone. A mode press changes the
+  transmitted temperature without setting it.
+- **The two timer cancel routes disagree.** TIMER twice disarms `b1` bit 3; winding the
+  hours to zero leaves it armed at zero hours. Only the first is unambiguous, and it is
+  what `Acp35TimerNumber` now sends for zero.
 
 **Questions 7–9: blocking.** A wrong answer here is not an edge case — the
 integration is unusable or silently does the wrong thing, and no fallback exists in
@@ -609,7 +704,7 @@ so none of them gates a release.
 | 10 | Do our frames reach the air as the bytes we built, and match the remote's for the same state? | `test_loopback.py` | that nothing between `get_raw_timings()` and the LED reshapes the waveform |
 | 11 | Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough? | `test_behaviour.py` | `_build_command` mirrors the remote's event bits — safe either way, so this only buys simplification |
 | 12 | Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed? | `test_behaviour.py` | whether `fan_modes` can gain `auto` |
-| 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | that we may send any fan with `Acp35Mode.DRY` |
+| 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | nothing any more. The remote forces low in dry and will not let the fan button move it, so `effective_fan()` mirrors that and we never send one. Answering this could relax the restriction, not fix a bug. |
 | 14 | Does the unit act on the unit flag, or is it display-only? | `test_behaviour.py` | that `display_celsius` is cosmetic and safe to follow from the remote |
 | 15 | Does a power-off frame really leave the mode running in `b6`? | `test_behaviour.py` | `async_set_hvac_mode(OFF)` keeps the last mode |
 
@@ -620,93 +715,14 @@ blocking precisely because it may be unanswerable, for the saturation reason not
 with the harness above; something that might never return an answer cannot gate a
 release. 12 is worth pairing with 3, which asks the same thing of the remote.
 
-### Temperature sweep — question 1
+### Procedures for questions 1–6
 
-Discovered in Phase 3: the two temperature tables are unevenly evidenced. All 14
-**°C → °F** entries are confirmed by captures, but only **6 of 25 °F → °C** are —
-62, 63, 64, 72, 75 and 86 °F. The other 19 (65–71, 73, 74, 76–85) follow the same
-rounding rule and are inference.
-
-This needs no transmit test and no new test code. It is a *capture* exercise against the
-original remote, not a hardware test of our encoder:
-
-1. Put the remote in °F mode and step through the full 62–86 range with the KC868-AG
-   receiving, logging one frame per value.
-2. Sweep 17–30 °C the same way. All 14 are already confirmed, so this run's value is
-   catching any transcription error in the original corpus.
-3. Paste the Pronto lines into the protocol document under a *Temperature sweep* heading.
-
-`tests/conftest.py` parses that document directly, so the corpus grows on its own and
-`test_temperature_fields_agree` validates each new entry with no code change. Then update
-the `(v)` provenance markers on `_FAHRENHEIT_TO_CELSIUS` in `acp35.py` and drop the
-"6 of 25 confirmed" caveat.
-
-### Remote button inventory — questions 2 and 3
-
-`b4`, `b5` and `b7` bits 5, 4 and 2 are zero in all 39 captures. There are two
-possible reasons and they are worth telling apart: either they are genuinely
-reserved, or **the original capture session never pressed the buttons that use
-them**. The captures cover power, timer, °C/°F, temperature, fan and mode — if
-the TZ20160122 remote has anything else on it (sleep, eco, turbo, swing, display
-or backlight, self-clean, "follow me"), those functions have never been recorded
-and would be the obvious candidates for the unused bits.
-
-This is cheap and worth doing before trusting the "always 0" fields:
-
-1. Photograph or list every button on the remote.
-2. Press each one that has not already been captured, in both directions where it
-   toggles, capturing each frame.
-3. Diff each against a baseline frame of the same machine state — `acp35_cli.py
-   --document --format bytes` makes that easy once they are in the document.
-
-Any bit that moves gets a name in `Acp35Flag` or a new field, and the "always 0"
-claims in the protocol document and in `acp35.py` get corrected. If nothing
-moves, the reserved claim is evidenced rather than assumed, which is worth having
-on the record either way.
-
-The same pass answers question 3 at no extra cost: cycle the fan button through its
-full loop and see whether `b6`'s high nibble ever reads `0`. If it does, the remote
-has a fan-auto the captures missed and `fan_modes` should gain it — subject to
-question 12, which asks the unit the same thing.
-
-### Timer UI recapture — questions 4, 5 and 6
-
-Discovered in Phase 1b: the original document recorded several timer observations **only**
-as decoded bit strings, with no accompanying Pronto capture. Those strings came out of the
-superseded analyzer, so they carry its misalignment and cannot be converted to correct
-frames. They were dropped rather than reprinted wrongly, which leaves two real gaps:
-
-- **`b7` bit 0 (`0x01`) is unexplained.** It appears in exactly one surviving capture, as
-  part of `0x03` on the first press of a timer cancel. One observation is not enough to
-  say what it means.
-- **How the timer interacts with other buttons is unknown.** One of the lost observations
-  was a fan press while the timer UI was open, which is the only evidence we had about
-  whether `b1` bit 3, `b2` and `b7` bit 1 survive a press that is not a timer press.
-
-Same shape as the temperature sweep: a capture exercise with the original remote, no new
-test code. With the KC868-AG receiving, capture each of these and paste the Pronto lines
-into the *Timer* section of the protocol document:
-
-1. Press timer to open the UI, then press **fan** — does `b7` bit 1 clear, does `b1` bit 3
-   stay armed, does `b2` keep its hours? (questions 4 and 5)
-2. **The one the encoder depends on:** with a timer running and the UI *closed*, press fan
-   or a temperature button. If `b7` bit 1 is clear in that frame, then bit 1 means "the
-   entry UI is open" and `_build_command` is wrong to derive it from `timer_hours > 0`;
-   it should come from the setter instead, like the other event bits. (question 4)
-3. Press timer, then **up to 15 h**, then wait for the UI to close on its own. Compare the
-   frame sent on acceptance with the ones sent while the UI was open.
-4. With a timer already running, press timer once to **view the remaining hours**, then let
-   the UI close without cancelling. This is the case the old document flagged with a
-   "?remaining?" and never resolved.
-5. The **cancel pair** again, both frames, at two different hour settings — enough to tell
-   whether `b7` bit 0 tracks the hours, the cancel, or something else. (question 6)
-6. Press timer while the unit is **powered off**, if the remote allows it.
-
-Then update the `Acp35Flag` docstring in `acp35.py` if bit 0 is explained, and replace the
-"lost with the superseded decoder" note in the protocol document's *Timer* section.
-
-This closes a documentation gap and an unexplained bit, not a blocking unknown: the
-timer is a single `NumberEntity` and its 0–24 h behaviour is already well evidenced.
+Removed. They described how to run capture exercises that are now complete; the
+answers are in the table above and the frames are in the protocol document. What
+the sessions produced, for anyone repeating them: `tools/hw.py mark` before each
+step, one step per physical action, and `tools/hw.py journal --since-mark` to
+read it back. Sweeping a whole temperature range in one marked step worked far
+better than one step per value.
 
 ### Frame timing and repeats — question 9
 
