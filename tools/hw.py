@@ -37,6 +37,12 @@ from pronto import to_pronto  # noqa: E402
 DEFAULT_JOURNAL = REPO_ROOT / "tests/hardware/journal.jsonl"
 DEFAULT_HA_URL = "http://localhost:8123"
 
+# The fake_ir stub registers an emitter and a receiver in the same instance as
+# the real device, so device class alone identifies two of each. Its entity ids
+# derive from the _attr_name values in tests/custom_components/fake_ir, which is
+# what makes this prefix a contract rather than a guess.
+SIMULATED_PREFIX = "infrared.fake_ir"
+
 
 def load_dotenv() -> None:
     """Load a .env beside pyproject.toml; existing variables take precedence."""
@@ -174,22 +180,35 @@ def infrared_entities(device_class: str | None = None) -> list[dict[str, Any]]:
 
 
 def resolve_entity(device_class: str) -> str:
-    """Return the entity id of the one infrared entity of this device class.
+    """Return the entity id of the one real infrared entity of this device class.
+
+    Entities from the fake_ir stub are excluded. It is loaded in the same
+    instance so the integration can be exercised without hardware, and it would
+    otherwise make every lookup ambiguous. Transmitting into the stub instead of
+    the KC868-AG would also produce a hardware test that passes without any
+    infrared leaving the room.
 
     Raises:
-        SystemExit: if there is not exactly one. Selecting from several would
-            transmit through whichever entity id sorted first.
+        SystemExit: if there is not exactly one, rather than selecting from
+            several by entity id order.
     """
-    found = [state["entity_id"] for state in infrared_entities(device_class)]
+    candidates = infrared_entities(device_class)
+    found = [
+        state["entity_id"]
+        for state in candidates
+        if not state["entity_id"].startswith(SIMULATED_PREFIX)
+    ]
     if len(found) == 1:
         return found[0]
     if not found:
+        simulated = len(candidates)
         raise SystemExit(
-            f"Home Assistant has no infrared {device_class}. Is the ESPHome "
-            "device added, and is it exposing ir_rf_proxy?"
+            f"Home Assistant has no real infrared {device_class}"
+            + (f", only {simulated} from the fake_ir stub. " if simulated else ". ")
+            + "Is the ESPHome device added, and is it exposing ir_rf_proxy?"
         )
     raise SystemExit(
-        f"Home Assistant has {len(found)} infrared {device_class}s: "
+        f"Home Assistant has {len(found)} real infrared {device_class}s: "
         f"{', '.join(found)}. Name the one to use explicitly."
     )
 
@@ -205,10 +224,12 @@ def cmd_entities(args: argparse.Namespace) -> int:
     width = max(len(state["entity_id"]) for state in infrared)
     for state in infrared:
         attributes = state["attributes"]
+        simulated = state["entity_id"].startswith(SIMULATED_PREFIX)
         print(
             f"{state['entity_id']:<{width}}  "
             f"{attributes.get('device_class', '?'):<8}  "
-            f"{attributes.get('friendly_name', '')}"
+            f"{attributes.get('friendly_name', ''):<30}  "
+            f"{'simulated, not selectable' if simulated else 'real'}"
         )
     return 0
 
