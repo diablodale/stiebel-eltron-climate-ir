@@ -7,7 +7,6 @@
         "data": {
           "emitter": "Infrared emitter",
           "receiver": "Infrared receiver (optional)",
-          "display_celsius": "Air conditioner displays Celsius",
           "name": "Name"
         }
       }
@@ -20,6 +19,15 @@
     "number": {
       "timer_hours": {
         "name": "Timer"
+      }
+    },
+    "select": {
+      "appliance_temperature_unit": {
+        "name": "Appliance temperature unit",
+        "state": {
+          "celsius": "Celsius",
+          "fahrenheit": "Fahrenheit"
+        }
       }
     }
   }

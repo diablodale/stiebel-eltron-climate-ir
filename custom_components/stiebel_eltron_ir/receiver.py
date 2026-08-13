@@ -143,10 +143,11 @@ class Acp35ReceiverSync:
         state.fahrenheit = command.fahrenheit
         state.timer_hours = command.timer_hours
 
-        # b7 bit 7 is the unit the unit itself is displaying, so follow it. This
-        # is deliberately not written back to the config entry: it tracks what
-        # the hardware is doing now, and the configured default wins on restart.
-        self._data.display_celsius = command.is_celsius
+        # b7 bit 7 is the unit the air conditioner is displaying, so follow it.
+        # It is shared state like everything else here, which is why the select
+        # entity reads it rather than holding a copy: pressing C/F on the remote
+        # has to move the select, not disagree with it.
+        state.display_celsius = command.is_celsius
 
         _LOGGER.debug("Followed the remote: %r", command)
         self._data.async_notify()

@@ -7,7 +7,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.stiebel_eltron_ir.const import (
-    CONF_DISPLAY_CELSIUS,
     CONF_EMITTER,
     CONF_RECEIVER,
     DOMAIN,
@@ -50,14 +49,20 @@ class TestUserFlow:
         )
         assert result["data"][CONF_RECEIVER] == "infrared.test_receiver"
 
-    async def test_display_unit_is_stored(
+    async def test_the_display_unit_is_not_asked_for(
         self, hass: HomeAssistant, emitter: str
     ) -> None:
+        """It is an entity, not configuration.
+
+        The remote's C/F button changes it and a receiver follows that, so a
+        value stored in the config entry would be overwritten by the first frame
+        that arrived and then come back on the next restart.
+        """
         result = await hass.config_entries.flow.async_configure(
             (await start(hass))["flow_id"],
-            {CONF_EMITTER: emitter, CONF_DISPLAY_CELSIUS: False},
+            {CONF_EMITTER: emitter},
         )
-        assert result["data"][CONF_DISPLAY_CELSIUS] is False
+        assert "display_celsius" not in result["data"]
 
     async def test_name_becomes_the_title(
         self, hass: HomeAssistant, emitter: str

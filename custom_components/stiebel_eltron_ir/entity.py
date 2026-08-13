@@ -90,7 +90,7 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         """
         state = self._data.state
         flags = event
-        if self._data.display_celsius:
+        if state.display_celsius:
             flags |= Acp35Flag.CELSIUS
 
         celsius, fahrenheit = effective_temperature(

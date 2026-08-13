@@ -8,14 +8,20 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.const import (
+    ATTR_TEMPERATURE,
+    EVENT_CORE_CONFIG_UPDATE,
+    UnitOfTemperature,
+)
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import Acp35ConfigEntry
 from .acp35 import (
     MAX_CELSIUS,
+    MAX_FAHRENHEIT,
     MIN_CELSIUS,
+    MIN_FAHRENHEIT,
     Acp35Fan,
     Acp35Flag,
     Acp35Mode,
@@ -41,10 +47,9 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
     """The air conditioner itself."""
 
     _attr_name = None
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    # Both of the appliance's scales are whole degrees -- 17..30 C and 62..86 F
+    # -- so the step is 1 either way and only the unit and bounds move.
     _attr_target_temperature_step = 1
-    _attr_min_temp = MIN_CELSIUS
-    _attr_max_temp = MAX_CELSIUS
     _attr_hvac_modes = [HVACMode.OFF, *HVAC_TO_MODE]
     _attr_fan_modes = list(FAN_TO_ACP)
     _attr_supported_features = (
@@ -54,9 +59,52 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
         | ClimateEntityFeature.TURN_OFF
     )
 
-    # --- UI OPTION 1 -- under evaluation, not a settled design ---------------
-    # Hide what the remote does not allow: the temperature is only adjustable in
-    # cool, and dry offers only low fan.
+    # The appliance has two scales, not one value shown two ways. In Celsius its
+    # up/down walks 17..30, fourteen steps; in Fahrenheit it walks 62..86,
+    # twenty-five. The two conversion tables are not inverses, so one of them has
+    # to be the scale the user drives on and the other its paired value.
+    #
+    # That scale is the Home Assistant profile's, not the appliance's. Home
+    # Assistant converts min, max and target from this entity's unit into the
+    # profile's unit, so matching them means no conversion happens and the card
+    # holds exactly the number the user picked. Reporting the appliance's scale
+    # instead put a round trip in the way -- 22 C converts to 71.6 F, which is not
+    # a value the protocol can carry, so it shipped 72 and the card came back
+    # reading 22.2. No step or rounding fixes that; 71.6 is simply not
+    # representable.
+    #
+    # A Fahrenheit user has a Fahrenheit profile, which is what makes them one,
+    # so they still get all twenty-five steps. The select keeps its own job:
+    # telling the appliance which unit to show on its panel.
+
+    @property
+    def _uses_celsius(self) -> bool:
+        """Return whether this Home Assistant install drives in Celsius."""
+        return self.hass.config.units.temperature_unit is UnitOfTemperature.CELSIUS
+
+    @property
+    @override
+    def temperature_unit(self) -> UnitOfTemperature:
+        """Return the profile's unit, so Home Assistant does not convert."""
+        return self.hass.config.units.temperature_unit
+
+    @property
+    @override
+    def min_temp(self) -> float:
+        """Return the bottom of the scale in use.
+
+        Whole in both, because the appliance's endpoints are pinned to each
+        other: 17 C and 62 F are both its minimum, 30 C and 86 F its maximum.
+        Converting one scale's bounds into the other would put the slider's end
+        at 16.67, where no position is a whole degree.
+        """
+        return MIN_CELSIUS if self._uses_celsius else MIN_FAHRENHEIT
+
+    @property
+    @override
+    def max_temp(self) -> float:
+        """Return the top of the scale in use."""
+        return MAX_CELSIUS if self._uses_celsius else MAX_FAHRENHEIT
 
     @property
     @override
@@ -99,6 +147,25 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
         super().__init__(entry)
         self._attr_unique_id = entry.entry_id
 
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Also follow the profile's unit, which this entity's scale tracks."""
+        await super().async_added_to_hass()
+        # Nothing re-reads hass.config.units on its own. This entity never polls
+        # -- it is assumed_state and only writes when something changes it -- so
+        # after the unit system is switched the card would keep the old number
+        # under the new unit's label: 19 C relabelled as 19 F rather than 66.
+        self.async_on_remove(
+            self.hass.bus.async_listen(
+                EVENT_CORE_CONFIG_UPDATE, self._handle_unit_system_change
+            )
+        )
+
+    @callback
+    def _handle_unit_system_change(self, event: Event) -> None:
+        """Re-render on the new scale."""
+        self.async_write_ha_state()
+
     @property
     @override
     def hvac_mode(self) -> HVACMode:
@@ -129,15 +196,21 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
     @property
     @override
     def target_temperature(self) -> float:
-        """Return the temperature actually being transmitted.
+        """Return the temperature actually being transmitted, in the scale in use.
 
         Dry and auto are pinned to the remote's default. The control is hidden
         in those modes so this is rarely displayed, but it must not claim a
         setpoint no frame carries.
+
+        The pair is read straight out of the frame's own fields rather than
+        converted, so the number here is one the protocol actually carries and
+        the card can hold it unchanged.
         """
         state = self._data.state
-        celsius, _ = effective_temperature(state.mode, state.celsius, state.fahrenheit)
-        return celsius
+        celsius, fahrenheit = effective_temperature(
+            state.mode, state.celsius, state.fahrenheit
+        )
+        return celsius if self._uses_celsius else fahrenheit
 
     @override
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -186,28 +259,39 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
 
     @override
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set the target temperature."""
+        """Set the target temperature on the profile's scale.
+
+        The value arrives already in this entity's unit, which is the profile's,
+        so no conversion has happened and it is the number the user typed. The
+        field for that scale is authoritative and its pair is derived, never the
+        other way round -- 63 F pairs to 17 C, but 17 C pairs back out to 62 F,
+        so deriving backwards would move the value by a degree.
+        """
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
-        self._data.state.set_celsius(_clamp_celsius(temperature))
+        state = self._data.state
+        if self._uses_celsius:
+            state.set_celsius(_whole(temperature, MIN_CELSIUS, MAX_CELSIUS))
+        else:
+            state.set_fahrenheit(_whole(temperature, MIN_FAHRENHEIT, MAX_FAHRENHEIT))
         await self._async_transmit(Acp35Flag.TEMP_CHANGED)
 
 
-def _clamp_celsius(temperature: float) -> int:
-    """Round a requested temperature to a whole degree in range.
+def _whole(temperature: float, minimum: int, maximum: int) -> int:
+    """Round a requested temperature to a whole degree within the scale.
 
     Rounding is the part that matters. Home Assistant's climate component already
     rejects anything outside ``min_temp``..``max_temp`` with a
     ``ServiceValidationError`` before the entity is called, but it does not round:
     a half degree passes straight through, and Acp35Command only accepts whole
-    ones. The clamp is belt and braces, and covers the restore path, where a
-    stored attribute could be out of range if the bounds ever change.
+    ones. Converting between scales produces fractions routinely -- 20 °C arrives
+    as 68.0 °F, but 21 °C arrives as 69.8 -- so this is the normal path in
+    Fahrenheit rather than a guard against odd input.
 
     Halves go up rather than through ``round()``, whose banker's rounding would
     send 20.5 down to 20 but 21.5 up to 22.
     """
-    whole = math.floor(temperature + 0.5)
-    return min(MAX_CELSIUS, max(MIN_CELSIUS, whole))
+    return min(maximum, max(minimum, math.floor(temperature + 0.5)))
 
 
 __all__ = ["Acp35Climate", "Acp35Fan", "Acp35Mode"]

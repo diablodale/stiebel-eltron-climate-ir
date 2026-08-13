@@ -12,7 +12,7 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import CONF_DISPLAY_CELSIUS, CONF_EMITTER, CONF_RECEIVER, DOMAIN
+from .const import CONF_EMITTER, CONF_RECEIVER, DOMAIN
 
 DEFAULT_TITLE = "Stiebel Eltron ACP 35"
 
@@ -32,7 +32,6 @@ STEP_USER_SCHEMA = vol.Schema(
                 device_class=InfraredDeviceClass.RECEIVER,
             )
         ),
-        vol.Optional(CONF_DISPLAY_CELSIUS, default=True): bool,
         vol.Optional("name", default=DEFAULT_TITLE): TextSelector(),
     }
 )

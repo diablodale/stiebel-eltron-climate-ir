@@ -718,7 +718,7 @@ so none of them gates a release.
 | 11 | Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough? | `test_behaviour.py` | `_build_command` mirrors the remote's event bits — safe either way, so this only buys simplification |
 | 12 | Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed? | `test_behaviour.py` | whether `fan_modes` can gain `auto` |
 | 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | nothing any more. The remote forces low in dry and will not let the fan button move it, so `effective_fan()` mirrors that and we never send one. Answering this could relax the restriction, not fix a bug. |
-| 14 | Does the unit act on the unit flag, or is it display-only? | `test_behaviour.py` | that `display_celsius` is cosmetic and safe to follow from the remote |
+| ~~14~~ | ~~Does the unit act on the unit flag?~~ **Answered 2026-08-13: it acts on it.** Pressing C/F on the remote changes the appliance's own display panel to the chosen unit. That makes the scale the appliance shows the scale the user reads, so the climate entity now reports whichever one `b7` bit 7 selects rather than always Celsius. | — | — |
 | 15 | Does a power-off frame really leave the mode running in `b6`? | `test_behaviour.py` | `async_set_hvac_mode(OFF)` keeps the last mode |
 
 Why 10 leads: it is the only fully automatic test in the hardware set, and if the

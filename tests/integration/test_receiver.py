@@ -24,7 +24,6 @@ from custom_components.stiebel_eltron_ir.acp35 import (
     Acp35Mode,
 )
 from custom_components.stiebel_eltron_ir.const import (
-    CONF_DISPLAY_CELSIUS,
     CONF_EMITTER,
     CONF_RECEIVER,
     DOMAIN,
@@ -48,7 +47,6 @@ async def entry_with_receiver(
         data={
             CONF_EMITTER: emitter,
             CONF_RECEIVER: RECEIVER_ID,
-            CONF_DISPLAY_CELSIUS: True,
         },
         unique_id=emitter,
     )
@@ -186,7 +184,7 @@ class TestFollowingTheRemote:
         data = entry_with_receiver.runtime_data
         assert data.state.celsius == 17
         assert data.state.fahrenheit == 63
-        assert data.display_celsius is False, "b7 bit 7 says the unit shows °F"
+        assert data.state.display_celsius is False, "b7 bit 7 says the unit shows °F"
 
         # And the next frame we send preserves it rather than re-deriving 62.
         await hass.services.async_call(
@@ -199,7 +197,7 @@ class TestFollowingTheRemote:
     ) -> None:
         deliver(hass, entry_with_receiver, remote_frame(fahrenheit=75))
         await hass.async_block_till_done()
-        assert entry_with_receiver.runtime_data.display_celsius is False
+        assert entry_with_receiver.runtime_data.state.display_celsius is False
 
     async def test_following_does_not_transmit(
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
@@ -310,7 +308,6 @@ class TestAgainstARealReceiver:
             data={
                 CONF_EMITTER: "infrared.fake_ir_emitter",
                 CONF_RECEIVER: "infrared.fake_ir_receiver",
-                CONF_DISPLAY_CELSIUS: True,
             },
             unique_id="infrared.fake_ir_emitter",
         )

@@ -26,7 +26,6 @@ import tests
 sys.path.insert(0, str(Path(tests.__file__).parent / "testing_config"))
 
 from custom_components.stiebel_eltron_ir.const import (
-    CONF_DISPLAY_CELSIUS,
     CONF_EMITTER,
     DOMAIN,
 )
@@ -62,21 +61,32 @@ def send_command() -> Generator[AsyncMock]:
         yield mock
 
 
-@pytest.fixture
-async def entry(
-    hass: HomeAssistant, emitter: str, send_command: AsyncMock
-) -> MockConfigEntry:
-    """Set up the integration against the mock emitter."""
+async def build_entry(hass: HomeAssistant, emitter: str) -> MockConfigEntry:
+    """Set up the integration against the mock emitter, leaving it powered off.
+
+    Separate from the ``entry`` fixture so a test can arrange something that has
+    to be true *before* setup runs -- the display unit is seeded from this Home
+    Assistant install's own unit, which cannot be changed after the fact.
+    """
     await async_setup_component(hass, "homeassistant", {})
     config_entry = MockConfigEntry(
         domain=DOMAIN,
         title="Stiebel Eltron ACP 35",
-        data={CONF_EMITTER: emitter, CONF_DISPLAY_CELSIUS: True},
+        data={CONF_EMITTER: emitter},
         unique_id=emitter,
     )
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    return config_entry
+
+
+@pytest.fixture
+async def entry(
+    hass: HomeAssistant, emitter: str, send_command: AsyncMock
+) -> MockConfigEntry:
+    """Set up the integration against the mock emitter."""
+    config_entry = await build_entry(hass, emitter)
 
     # Power on. The shadow state starts off, and the remote ignores every button
     # but power and timer while off, so a test that sets a fan speed or a

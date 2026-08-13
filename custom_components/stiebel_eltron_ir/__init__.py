@@ -17,15 +17,21 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Self, override
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import Platform, UnitOfTemperature
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.restore_state import ExtraStoredData
 
-from .acp35 import Acp35Fan, Acp35Mode, celsius_to_fahrenheit, effective_fan
-from .const import CONF_DISPLAY_CELSIUS, CONF_EMITTER, CONF_RECEIVER
+from .acp35 import (
+    Acp35Fan,
+    Acp35Mode,
+    celsius_to_fahrenheit,
+    effective_fan,
+    fahrenheit_to_celsius,
+)
+from .const import CONF_EMITTER, CONF_RECEIVER
 from .receiver import Acp35ReceiverSync
 
-PLATFORMS = [Platform.CLIMATE, Platform.NUMBER]
+PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.SELECT]
 
 # How long after transmitting an identical frame counts as our own echo. A frame
 # takes about 90 ms on the wire and the receiver adds its 10 ms idle timeout, so
@@ -75,6 +81,11 @@ class Acp35State:
     celsius: int = 22
     fahrenheit: int = 72
     timer_hours: int = 0
+    # b7 bit 7: which unit the air conditioner shows on its own display. State
+    # rather than configuration -- the remote's C/F button changes it and we
+    # follow that, so it belongs here with everything else the unit is doing.
+    # Seeded from the Home Assistant install's unit at setup.
+    display_celsius: bool = True
 
     @property
     def fan(self) -> Acp35Fan:
@@ -97,6 +108,17 @@ class Acp35State:
         self.celsius = celsius
         self.fahrenheit = celsius_to_fahrenheit(celsius)
 
+    def set_fahrenheit(self, fahrenheit: int) -> None:
+        """Set the temperature from Fahrenheit, repairing the Celsius field.
+
+        The mirror of :meth:`set_celsius`, and needed because the two tables are
+        not inverses. Whichever scale the appliance is displaying is the one the
+        user is choosing on, so that field is authoritative and the other is its
+        pair; deriving the wrong way round would move the displayed number.
+        """
+        self.fahrenheit = fahrenheit
+        self.celsius = fahrenheit_to_celsius(fahrenheit)
+
 
 @dataclass
 class Acp35RestoreData(ExtraStoredData):
@@ -115,6 +137,7 @@ class Acp35RestoreData(ExtraStoredData):
     celsius: int
     fahrenheit: int
     timer_hours: int
+    display_celsius: bool
 
     @classmethod
     def from_state(cls, state: Acp35State) -> Self:
@@ -134,6 +157,7 @@ class Acp35RestoreData(ExtraStoredData):
             celsius=state.celsius,
             fahrenheit=state.fahrenheit,
             timer_hours=state.timer_hours,
+            display_celsius=state.display_celsius,
         )
 
     @override
@@ -158,6 +182,7 @@ class Acp35RestoreData(ExtraStoredData):
                 celsius=int(data["celsius"]),
                 fahrenheit=int(data["fahrenheit"]),
                 timer_hours=int(data["timer_hours"]),
+                display_celsius=bool(data["display_celsius"]),
             )
         except KeyError, TypeError, ValueError, AttributeError:
             return None
@@ -184,6 +209,7 @@ class Acp35RestoreData(ExtraStoredData):
         state.celsius = self.celsius
         state.fahrenheit = self.fahrenheit
         state.timer_hours = self.timer_hours
+        state.display_celsius = self.display_celsius
 
 
 @dataclass
@@ -192,7 +218,6 @@ class Acp35Data:
 
     emitter_entity_id: str
     receiver_entity_id: str | None
-    display_celsius: bool
     state: Acp35State = field(default_factory=Acp35State)
     _listeners: list[CALLBACK_TYPE] = field(default_factory=list)
     _sent: deque[tuple[bytes, float]] = field(
@@ -255,7 +280,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> boo
     data = entry.runtime_data = Acp35Data(
         emitter_entity_id=entry.data[CONF_EMITTER],
         receiver_entity_id=entry.data.get(CONF_RECEIVER),
-        display_celsius=entry.data.get(CONF_DISPLAY_CELSIUS, True),
+    )
+    # Seed the unit the air conditioner displays from this Home Assistant
+    # install's own unit, which is the closest thing to the user's intent we can
+    # know without asking. A restore or a frame from the remote overrides it.
+    data.state.display_celsius = (
+        hass.config.units.temperature_unit == UnitOfTemperature.CELSIUS
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

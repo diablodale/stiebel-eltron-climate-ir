@@ -294,7 +294,7 @@ which button produced the frame:
 
 | bit | kind | meaning |
 | --- | ---- | ------- |
-| 7 `0x80` | state | display unit: `1` = °C, `0` = °F. The one genuinely persistent bit. |
+| 7 `0x80` | state | display unit: `1` = °C, `0` = °F. The one genuinely persistent bit, and the unit acts on it: pressing C/F changes the appliance's own display panel. |
 | 6 `0x40` | event | set by an up/down press that moved the **temperature setpoint**. |
 | 3 `0x08` | event | set only in frames from the power button, for both on and off. |
 | 1 `0x02` | event | set while the timer entry display is open. |
@@ -339,6 +339,31 @@ in both directions across the whole valid domain, and no input lands on an exact
 **Every pairing in both directions is confirmed by a capture.** All 14 °C → °F
 and all 25 °F → °C, from sweeping the remote through its full range in each
 display unit. Nothing above is inference.
+
+#### Two scales, not one value shown twice
+
+Because the mappings are not inverses, the two fields are not one temperature in
+two notations. They are **two scales of different length**: Celsius is 14 steps
+and Fahrenheit is 25, and up/down walks whichever one is displayed. The 11 °F
+values that pair with no whole Celsius degree — 63, 65, 67, 69, 71, 74, 76, 78,
+80, 83, 85 — are reachable only from a remote displaying °F.
+
+A consumer therefore has to pick which scale its user drives on, and populate
+that field from the user's choice with the other as its pair. Deriving the wrong
+way round moves the number by a degree: 63 °F pairs to 17 °C, but 17 °C pairs
+back out to 62 °F.
+
+Picking the scale by what the **appliance** is displaying looks right and is not.
+The user's own value has to survive a round trip through the consumer's display
+layer, and an arbitrary value on one scale is not representable on the other:
+22 °C is 71.6 °F, which no frame can carry, so it ships as 72 and reads back as
+22.2. Picking the scale the **user** is reading avoids the round trip entirely,
+and costs nothing, because the scales' endpoints are pinned to each other — 17 °C
+and 62 °F are both the minimum, 30 °C and 86 °F both the maximum — so the bounds
+are whole numbers either way.
+
+`b7` bit 7 still has to be settable and followable independently, because it is
+what the appliance's own panel shows.
 
 #### Only cool owns the setpoint
 
