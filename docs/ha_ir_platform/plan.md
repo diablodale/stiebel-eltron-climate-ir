@@ -403,30 +403,53 @@ writes it, so using the original remote no longer desyncs HA; on a non-match it 
 silently. Subscribing directly, rather than also inheriting `InfraredReceiverConsumerEntity`,
 avoids a diamond over `InfraredConsumerEntity`.
 
-## Deferred work
+## Settled design decisions
 
-Decided but not scheduled. Each is independent of the open hardware questions.
+### Mode-dependent controls are hidden, not shown inert. Settled 2026-08-13
 
-### The display-unit checkbox should not be a setup question
+The remote adjusts the temperature only in cool, forces low fan in dry, and
+answers nothing but power and timer while off. The climate entity mirrors that by
+dropping `TARGET_TEMPERATURE` and `FAN_MODE` from `supported_features`, and by
+narrowing `fan_modes` to low in dry.
 
-`CONF_DISPLAY_CELSIUS` appears in the config flow as "Air conditioner displays
+The alternative considered was keeping every control present and reporting the
+pinned value. Rejected:
+
+- `supported_features` is a bitmask with no read-only state, so a control that is
+  present but does nothing looks identical to one that works. Home Assistant's
+  climate platform cannot render a disabled control with an explanation.
+- Home Assistant validates `set_temperature` against `supported_features` before
+  the entity is called, so hiding the feature makes a wrong automation fail with
+  a `ServiceValidationError` instead of silently doing nothing.
+- The cost predicted for hiding -- the card resizing as controls appear and
+  disappear on a mode change -- does not occur in practice. Confirmed against the
+  live instance.
+
+### Appliance temperature unit is an entity, not a setup question. Settled 2026-08-13
+
+`CONF_DISPLAY_CELSIUS` was a config-flow checkbox, "Air conditioner displays
 Celsius". Three problems, in increasing order of importance:
 
-- **The label describes state but the field is an instruction.** It sets `b7`
+- **The label described state but the field was an instruction.** It sets `b7`
   bit 7 on everything we transmit, so it does not report what the unit is
-  showing, it decides what the unit *will* show. "Set the air conditioner's
-  display to Celsius" is what it does.
-- **The hardware already answers it.** `receiver.py` overwrites
-  `display_celsius` from any frame the receiver hears, so with a receiver
-  configured the setup answer is replaced the first time anyone touches the
-  remote. Asking at setup time for something discoverable seconds later is a
-  question worth not asking.
-- **It cannot be changed afterwards.** It is config-entry data with no options
-  flow, so a user without a receiver who picks wrong has to delete and re-add the
-  integration.
+  showing, it decides what the unit *will* show.
+- **It could not be changed afterwards.** Config-entry data with no options flow,
+  so a user who picked wrong had to delete and re-add the integration.
+- **The hardware already answers it.** `receiver.py` overwrites `display_celsius`
+  from any frame the receiver hears, so with a receiver configured the setup
+  answer is replaced the first time anyone touches the remote.
 
-Intended shape: default `True`, drop it from the initial step, and expose it
-through an options flow for the no-receiver case.
+The third rules out configuration entirely rather than arguing for an options
+flow, which is what the intended fix had been. A value the hardware overwrites at
+runtime is state, and state belongs in an entity. It became a `select`, named
+"Appliance temperature unit", seeded from the Home Assistant install's own unit,
+persisted with the rest of the shadow state, and followed from the receiver. One
+value, so the select, the receiver and the transmitted frame cannot disagree.
+
+The appliance acts on the bit -- pressing C/F moves its own display panel -- so
+this is not cosmetic. It does not decide the scale Home Assistant controls in;
+that follows the profile's unit, for the reasons in the protocol document's
+"Two scales, not one value shown twice".
 
 ## Verification
 

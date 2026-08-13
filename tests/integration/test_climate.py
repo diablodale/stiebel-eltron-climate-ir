@@ -500,11 +500,17 @@ class TestOnlyCoolHasASetpoint:
 
 
 class TestModeDependentControls:
-    """UI option 1, under evaluation: hide what the remote does not allow.
+    """Hide what the remote does not allow. Settled 2026-08-13.
 
     The temperature is adjustable only in cool. Fan mode transmits cool's
     setpoint, but the remote still hides the number there, so what a frame
     carries and what the user can change are separate questions.
+
+    The alternative -- keeping every control and reporting the pinned value --
+    was rejected. `supported_features` is a bitmask with no read-only state, so
+    it would render a control that looks live and does nothing, and Home
+    Assistant would stop rejecting `set_temperature` in dry before the entity
+    saw it.
     """
 
     @pytest.mark.parametrize(
