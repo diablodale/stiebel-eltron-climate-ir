@@ -163,12 +163,33 @@ class TestFollowingTheRemote:
         await hass.async_block_till_done()
         assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 29
 
+    @pytest.mark.usefixtures("entity_registry_enabled_by_default")
     async def test_timer_is_followed(
         self, hass: HomeAssistant, entry_with_receiver
     ) -> None:
+        """The read-out is disabled by default, so this enables it."""
         deliver(hass, entry_with_receiver, remote_frame(timer_hours=8))
         await hass.async_block_till_done()
         assert float(hass.states.get(TIMER_ID).state) == 8
+
+    async def test_a_followed_timer_rides_along_in_our_frames(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """Clearing it would cancel a timer the user set on the handset.
+
+        Both fields survive a press that is not a timer press -- that is what the
+        remote does -- so a value we heard has to travel in everything we send.
+        """
+        deliver(hass, entry_with_receiver, remote_frame(timer_hours=8))
+        await hass.async_block_till_done()
+
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            SERVICE_SET_FAN_MODE,
+            {ATTR_ENTITY_ID: CLIMATE_ID, ATTR_FAN_MODE: "low"},
+            blocking=True,
+        )
+        assert last_command(send_command).timer_hours == 8
 
     async def test_a_fahrenheit_frame_keeps_its_own_pairing(
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
@@ -370,7 +391,6 @@ class TestWithoutAReceiver:
         assert entry.data.get(CONF_RECEIVER) is None
         assert entry.runtime_data.receiver_entity_id is None
         assert hass.states.get(CLIMATE_ID).state != "unavailable"
-        assert hass.states.get(TIMER_ID).state != "unavailable"
 
     async def test_control_is_unaffected(
         self, hass: HomeAssistant, entry, send_command: AsyncMock

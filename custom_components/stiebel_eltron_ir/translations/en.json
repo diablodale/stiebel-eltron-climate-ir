@@ -16,11 +16,6 @@
     }
   },
   "entity": {
-    "number": {
-      "timer_hours": {
-        "name": "Timer"
-      }
-    },
     "select": {
       "appliance_temperature_unit": {
         "name": "Appliance temperature unit",
@@ -28,6 +23,11 @@
           "celsius": "Celsius",
           "fahrenheit": "Fahrenheit"
         }
+      }
+    },
+    "sensor": {
+      "timer_hours": {
+        "name": "Timer"
       }
     }
   }

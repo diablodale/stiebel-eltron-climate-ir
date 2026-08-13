@@ -32,7 +32,7 @@ from custom_components.stiebel_eltron_ir.const import (
 
 EMITTER_ID = "infrared.test_emitter"
 CLIMATE_ID = "climate.stiebel_eltron_acp_35"
-TIMER_ID = "number.stiebel_eltron_acp_35_timer"
+TIMER_ID = "sensor.stiebel_eltron_acp_35_timer"
 
 
 @pytest.fixture(autouse=True)

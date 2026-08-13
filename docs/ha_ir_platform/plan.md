@@ -647,6 +647,48 @@ Two consequences for the encoder, both open:
   missing leading mark but not an extra one, so every loopback frame decodes as
   `None`. Fix before question 10 can assert anything.
 
+### Known defect: a heard timer is replayed forever
+
+**Status: unresolved, and both available behaviours are wrong.** Recorded so it is
+not rediscovered as a surprise.
+
+The timer is no longer settable from Home Assistant -- it is a disabled-by-default
+diagnostic read-out -- but `b2` and `b1` bit 3 are in every frame, so whatever
+value the receiver last heard from the remote keeps travelling in everything we
+send.
+
+**Nothing can clear it.** The appliance acting on its own timer is not a button
+press and emits no infrared, so expiry is invisible to us. Only a cancel frame
+from the remote, heard while the receiver is in range, sets it back to zero.
+
+So:
+
+```text
+t=0     remote sets 3 h          shadow stores 3
+t=1h    any change made in HA    we transmit timer=3, armed
+                                 -> the appliance now switches off at t=4h
+```
+
+The alternative, transmitting zero always, is no better: it cancels a timer the
+user set on the handset the moment anyone touches Home Assistant. Replaying at
+least matches the remote, where both fields survive a press that is not a timer
+press (question 5), which is why it is what the code does.
+
+Underneath both sits a constraint no implementation removes: **`b2` holds whole
+hours**, so any frame sent while a timer runs has to round, moving the expiry by
+up to half an hour. A full-state protocol cannot leave a running timer alone.
+
+Resolving it needs the third part of the timer capture sequence below: set a
+timer, wait past an hour boundary, then make an *ordinary* press with the entry
+display closed. If `b2` has decremented, the remote transmits hours remaining and
+we can expire the value locally against the frame's arrival time -- approximately,
+but never resurrecting a timer that has already fired. If `b2` still reads as-set,
+the remaining time cannot be derived from frames at all, and the honest options
+narrow to replaying it or refusing to.
+
+The one capture that touches this -- `fan pressed while 3 h counts down` -- does
+not settle it, because how long the timer had been running was not recorded.
+
 ### Open questions the hardware must settle
 
 Accumulated across Phases 3–5. Each one is a place where the code had to assume

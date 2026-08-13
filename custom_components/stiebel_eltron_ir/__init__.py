@@ -31,7 +31,7 @@ from .acp35 import (
 from .const import CONF_EMITTER, CONF_RECEIVER
 from .receiver import Acp35ReceiverSync
 
-PLATFORMS = [Platform.CLIMATE, Platform.NUMBER, Platform.SELECT]
+PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
 
 # How long after transmitting an identical frame counts as our own echo. A frame
 # takes about 90 ms on the wire and the receiver adds its 10 ms idle timeout, so

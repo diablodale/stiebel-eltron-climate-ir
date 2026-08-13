@@ -12,7 +12,7 @@ from custom_components.stiebel_eltron_ir.const import (
     DOMAIN,
 )
 
-from .conftest import CLIMATE_ID, EMITTER_ID, TIMER_ID
+from .conftest import CLIMATE_ID, EMITTER_ID
 
 
 async def start(hass: HomeAssistant):
@@ -93,7 +93,6 @@ class TestWithoutAReceiver:
     ) -> None:
         assert entry.data.get(CONF_RECEIVER) is None
         assert hass.states.get(CLIMATE_ID) is not None
-        assert hass.states.get(TIMER_ID) is not None
 
     async def test_control_still_works(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
@@ -112,7 +111,6 @@ class TestWithoutAReceiver:
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
         assert hass.states.get(CLIMATE_ID).state != "unavailable"
-        assert hass.states.get(TIMER_ID).state != "unavailable"
 
 
 class TestUnload:

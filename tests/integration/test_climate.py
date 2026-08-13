@@ -30,7 +30,7 @@ from custom_components.stiebel_eltron_ir.acp35 import (
     Acp35Mode,
 )
 
-from .conftest import CLIMATE_ID, TIMER_ID, last_command
+from .conftest import CLIMATE_ID, last_command
 
 
 async def call(hass: HomeAssistant, service: str, **data) -> None:
@@ -604,20 +604,18 @@ class TestPoweredOffIgnoresControls:
         await call(hass, SERVICE_TURN_ON)
         assert last_command(send_command).power is True
 
-    async def test_the_timer_still_works_while_off(
+    async def test_a_pending_timer_rides_along_while_off(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
-        """The other responding button. The manual gives it a switch-on delay."""
-        from homeassistant.components.number import ATTR_VALUE, SERVICE_SET_VALUE
-        from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+        """Both timer fields survive a press that is not a timer press.
 
+        Home Assistant no longer sets the timer, but a value heard from the
+        remote still has to travel in every frame -- clearing it would cancel a
+        timer the user set on the handset.
+        """
+        entry.runtime_data.state.timer_hours = 5
         await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
-        await hass.services.async_call(
-            NUMBER_DOMAIN,
-            SERVICE_SET_VALUE,
-            {ATTR_ENTITY_ID: TIMER_ID, ATTR_VALUE: 5},
-            blocking=True,
-        )
+
         command = last_command(send_command)
         assert command.timer_hours == 5
         assert command.power is False, "the timer must not power the unit on"
