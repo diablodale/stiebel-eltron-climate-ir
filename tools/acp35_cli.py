@@ -68,7 +68,7 @@ def describe(command: Acp35Command) -> str:
     if unnamed:
         events.append(f"unknown 0x{unnamed:02X}")
 
-    if command.timer_armed:
+    if command.timer_off_delay:
         timer = f"armed, {command.timer_hours} h"
     elif command.timer_hours:
         timer = f"off, but {command.timer_hours} h still in b2"
@@ -160,7 +160,7 @@ def summarise(command: Acp35Command) -> str:
         f"{command.fan.name.lower()} fan",
         f"{temperature}{unit}",
     ]
-    if command.timer_armed:
+    if command.timer_off_delay:
         parts.append(f"timer {command.timer_hours}h")
     return ", ".join(parts)
 

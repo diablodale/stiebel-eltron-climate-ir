@@ -49,7 +49,7 @@ b0  b1  b2  b3  b4  b5  b6  b7  ck
 | byte | field |
 | ---- | ----- |
 | `b0` | constant `0x55` |
-| `b1` | bits 7-4 = °C − 16 (1..14 → 17..30 °C); bit 3 = timer armed; bit 1 = power on; bits 2,0 = 0 |
+| `b1` | bits 7-4 = °C − 16 (1..14 → 17..30 °C); bit 3 = pending timer will switch the unit off; bit 1 = power on; bits 2,0 = 0 |
 | `b2` | timer hours, plain binary 0..24 |
 | `b3` | °F − 59 (3..27 → 62..86 °F) |
 | `b4` | 0 (never observed non-zero) |
@@ -651,6 +651,19 @@ KC868-AG, no transmitting and no air conditioner. 128 frames, every checksum val
 | 4 | Is `b7` bit 1 set on an *ordinary* press while a timer is already running? | **No** — the bit reports the entry display, not a pending timer. `_build_command` was wrong and is fixed. |
 | 5 | Do `b1` bit 3 and `b2` survive a non-timer press? | **Yes.** Both survive; the shadow state may hold the timer across other changes. |
 | 6 | What `b7` bit 0 means | **A TIMER press that reopened the display on a timer already set.** Identical at 5 h and 7 h, so it does not encode the hours. |
+
+A later session (2026-08-13) captured the one timer case the corpus had never covered —
+the unit **off** — and it corrected the frame format:
+
+- **`b1` bit 3 is not "a timer is set", it is "the pending timer will switch the unit
+  off".** With the unit off and three hours pending the bit is clear while `b2` carries the
+  hours; with the unit on the same state sets it. Off-delay while running, on-delay while
+  stopped, exactly as the manual describes. Tested over all 76 decodable frames,
+  `bit 3 == power AND (hours > 0 OR entry display open)` fits every one; the rule it
+  replaces, `bit 3 == hours > 0`, mismatches eight. The field is now `timer_off_delay`.
+- **Nothing else about the timer changes when the unit is off.** The entry display opens at
+  zero hours, up counts the same, `b7` bits 1 and 0 behave identically, and TIMER-then-TIMER
+  cancels by clearing both fields.
 
 Three things turned up that were not asked about:
 

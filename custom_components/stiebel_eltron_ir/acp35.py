@@ -13,7 +13,7 @@ Frame (pulse-distance, MSB first, byte 0 first)::
     b0  b1  b2  b3  b4  b5  b6  b7  ck
 
     b0  constant 0x55
-    b1  bits 7-4  degrees C minus 16      bit 3  timer armed
+    b1  bits 7-4  degrees C minus 16      bit 3  timer will switch off
         bit 1     power on                bits 2, 0  always 0
     b2  timer hours, 0..24
     b3  degrees F minus 59
@@ -72,7 +72,7 @@ DEFAULT_CELSIUS = 22
 
 _CELSIUS_BIAS = 16
 _FAHRENHEIT_BIAS = 59
-_TIMER_ARMED_MASK = 0x08
+_TIMER_OFF_DELAY_MASK = 0x08
 _POWER_MASK = 0x02
 
 # The remote always transmits both temperature fields. Whichever unit the user
@@ -255,7 +255,7 @@ class Acp35Command(Command):
         celsius: int | None = None,
         fahrenheit: int | None = None,
         timer_hours: int = 0,
-        timer_armed: bool | None = None,
+        timer_off_delay: bool | None = None,
         flags: Acp35Flag | int | None = None,
         modulation: int = CARRIER_HZ,
     ) -> None:
@@ -266,9 +266,13 @@ class Acp35Command(Command):
         b7 follows the one you gave. Passing both stores them verbatim, which is
         what :meth:`from_raw_timings` uses to round-trip a captured frame.
 
-        ``timer_armed`` defaults to ``timer_hours > 0``. They are separate bits
-        in the protocol and the remote does emit armed-with-zero-hours while its
-        timer UI is open, so it can be forced.
+        ``timer_off_delay`` is b1 bit 3, and it does not mean "a timer is set".
+        It means the pending timer will switch the unit *off*, so it follows the
+        power state: with the unit running the timer is an off-delay and the bit
+        is set, while with the unit stopped the same timer is an on-delay, `b2`
+        carries the hours and the bit stays clear. It defaults to that rule and
+        can still be forced, because the remote also sets it at zero hours while
+        its entry display is open.
 
         ``flags`` is the whole of b7. Left as ``None`` it is just the unit bit.
         """
@@ -300,10 +304,15 @@ class Acp35Command(Command):
         self.celsius = celsius
         self.fahrenheit = fahrenheit
         self.timer_hours = timer_hours
-        self.timer_armed = timer_hours > 0 if timer_armed is None else timer_armed
         if flags is None:
             flags = Acp35Flag.CELSIUS if is_celsius else Acp35Flag.NONE
         self.flags = Acp35Flag(flags)
+        if timer_off_delay is None:
+            # A timer counts as pending either because it has hours or because
+            # the entry display is open, which the remote arms at zero hours.
+            pending = timer_hours > 0 or Acp35Flag.TIMER_UI in self.flags
+            timer_off_delay = power and pending
+        self.timer_off_delay = timer_off_delay
 
     @property
     def is_celsius(self) -> bool:
@@ -313,8 +322,8 @@ class Acp35Command(Command):
     def to_bytes(self) -> bytes:
         """Render the nine frame bytes, checksum included."""
         b1 = (self.celsius - _CELSIUS_BIAS) << 4
-        if self.timer_armed:
-            b1 |= _TIMER_ARMED_MASK
+        if self.timer_off_delay:
+            b1 |= _TIMER_OFF_DELAY_MASK
         if self.power:
             b1 |= _POWER_MASK
 
@@ -386,7 +395,7 @@ class Acp35Command(Command):
             celsius=(state[1] >> 4) + _CELSIUS_BIAS,
             fahrenheit=state[3] + _FAHRENHEIT_BIAS,
             timer_hours=state[2],
-            timer_armed=bool(state[1] & _TIMER_ARMED_MASK),
+            timer_off_delay=bool(state[1] & _TIMER_OFF_DELAY_MASK),
             flags=Acp35Flag(state[7]),
         )
 
@@ -411,7 +420,7 @@ class Acp35Command(Command):
             f"{type(self).__name__}("
             f"power={self.power}, mode={self.mode.name}, fan={self.fan.name}, "
             f"celsius={self.celsius}, fahrenheit={self.fahrenheit}, "
-            f"timer_hours={self.timer_hours}, timer_armed={self.timer_armed}, "
+            f"timer_hours={self.timer_hours}, timer_off_delay={self.timer_off_delay}, "
             f"flags={self.flags!r}) "
             f"[{self.to_bytes().hex(' ').upper()}]"
         )

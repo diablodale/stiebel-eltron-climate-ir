@@ -1,8 +1,9 @@
-"""Shutdown-timer entity behaviour."""
+"""Timer entity behaviour."""
 
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.number import (
     ATTR_VALUE,
     SERVICE_SET_VALUE,
@@ -10,7 +11,7 @@ from homeassistant.components.number import (
 from homeassistant.components.number import (
     DOMAIN as NUMBER_DOMAIN,
 )
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
@@ -25,6 +26,16 @@ async def set_hours(hass: HomeAssistant, value: float) -> None:
         NUMBER_DOMAIN,
         SERVICE_SET_VALUE,
         {ATTR_ENTITY_ID: TIMER_ID, ATTR_VALUE: value},
+        blocking=True,
+    )
+
+
+async def power_off(hass: HomeAssistant) -> None:
+    """Stop the unit, so a pending timer becomes an on-delay."""
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: CLIMATE_ID},
         blocking=True,
     )
 
@@ -59,7 +70,7 @@ class TestTransmission:
     ) -> None:
         await set_hours(hass, 6)
         command = last_command(send_command)
-        assert command.timer_armed is True
+        assert command.timer_off_delay is True
         assert command.to_bytes()[1] & 0x08
 
     async def test_zero_disarms_and_clears_the_hours(
@@ -68,10 +79,42 @@ class TestTransmission:
         await set_hours(hass, 6)
         await set_hours(hass, 0)
         command = last_command(send_command)
-        assert command.timer_armed is False
+        assert command.timer_off_delay is False
         assert command.timer_hours == 0
         assert not command.to_bytes()[1] & 0x08
         assert command.to_bytes()[2] == 0
+
+    async def test_a_timer_set_while_off_is_an_on_delay(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Reproduces the captured frame byte for byte.
+
+        The remote answers the timer button with the unit off -- it is one of
+        only two that do -- and carries the hours in b2 with b1 bit 3 clear,
+        because that timer switches the unit on rather than off. Deriving the
+        bit from `hours > 0` sent 0x68 where the remote sends 0x60.
+        """
+        await power_off(hass)
+        await set_hours(hass, 3)
+
+        command = last_command(send_command)
+        assert command.power is False
+        assert command.timer_hours == 3
+        assert command.timer_off_delay is False
+        assert command.to_bytes()[1] == 0x60
+        assert Acp35Flag.TIMER_UI in command.flags, "the entry display still opens"
+
+    async def test_powering_off_turns_a_pending_timer_into_an_on_delay(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """The hours survive the power change; only bit 3 follows it."""
+        await set_hours(hass, 4)
+        assert last_command(send_command).timer_off_delay is True
+
+        await power_off(hass)
+        command = last_command(send_command)
+        assert command.timer_hours == 4, "the timer itself must survive"
+        assert command.timer_off_delay is False
 
     async def test_arming_sets_the_timer_ui_flag(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
@@ -89,7 +132,7 @@ class TestTransmission:
         await set_hours(hass, 3)
         await set_hours(hass, 0)
         assert Acp35Flag.TIMER_UI not in last_command(send_command).flags
-        assert last_command(send_command).timer_armed is False
+        assert last_command(send_command).timer_off_delay is False
 
     async def test_other_entities_do_not_carry_the_timer_ui_flag(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
@@ -120,7 +163,7 @@ class TestTransmission:
         command = last_command(send_command)
         assert Acp35Flag.TIMER_UI not in command.flags
         assert command.timer_hours == 3, "the timer itself must survive"
-        assert command.timer_armed is True
+        assert command.timer_off_delay is True
 
     @pytest.mark.parametrize("hours", [-1, 25, 100])
     async def test_out_of_range_is_rejected_by_home_assistant(

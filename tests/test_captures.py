@@ -21,7 +21,9 @@ GOLDEN = [
     "552A0705000021832F", "552A00050000218227", "552A03050000218028",
     "558A00100000310222", "558A00100000310222", "558A01100000310223",
     "558A02100000310224", "558A1810000031023A", "558A1810000031033B",
-    "558200100000310018", "5562000D00003100F5", "5562000D0000318075",
+    "558200100000310018", "5560000D0000218265", "5560010D0000218266",
+    "5560020D0000218267", "5560030D0000218268", "5560030D0000218369",
+    "5560000D0000218063", "5562000D00003100F5", "5562000D0000318075",
     "5572000E000031C0C6", "5562000D000031C0B5", "55120003000031C05B",
     "55220005000031C06D", "55320007000031C07F", "55420009000031C091",
     "5552000B000031C0A3", "55820010000031C0D8", "55920012000031C0EA",
@@ -198,7 +200,7 @@ class TestAgainstDocumentedIntent:
     def test_timer_arms_before_hours_are_chosen(self):
         """Pressing timer arms the bit while the hour count is still zero."""
         command = decode("press timer with no timer set")
-        assert command.timer_armed
+        assert command.timer_off_delay
         assert command.timer_hours == 0
         assert Acp35Flag.TIMER_UI in command.flags
 
@@ -210,7 +212,7 @@ class TestAgainstDocumentedIntent:
         """
         command = decode("fan pressed while 3 h counts down")
         assert Acp35Flag.TIMER_UI not in command.flags
-        assert command.timer_armed, "b1 bit 3 must survive a non-timer press"
+        assert command.timer_off_delay, "b1 bit 3 must survive a non-timer press"
         assert command.timer_hours == 3, "b2 must survive a non-timer press"
 
     @pytest.mark.parametrize(
@@ -224,13 +226,62 @@ class TestAgainstDocumentedIntent:
         """
         assert decode(label).flags & 0x01
 
+    def test_the_timer_answers_while_the_unit_is_off(self):
+        """One of only two buttons the remote responds to in that state.
+
+        The entry display opens at zero hours and up counts exactly as it does
+        while running, so nothing about the sequence changes -- only b1 bit 3.
+        """
+        opened = decode("opens the entry display at 0 h")
+        assert not opened.power
+        assert opened.timer_hours == 0
+        assert Acp35Flag.TIMER_UI in opened.flags
+
+        for hours, label in ((1, "up to 1 h"), (2, "up to 2 h"), (3, "up to 3 h")):
+            command = decode(label)
+            assert not command.power
+            assert command.timer_hours == hours
+            assert Acp35Flag.TIMER_UI in command.flags
+
+    def test_a_timer_set_while_off_does_not_set_bit_three(self):
+        """Three hours pending, b1 bit 3 clear: this timer switches the unit on.
+
+        The rule this replaced, `bit 3 == hours > 0`, would have put the bit on
+        a frame the remote demonstrably does not.
+        """
+        command = decode("up to 3 h")
+        assert command.timer_hours == 3
+        assert not command.timer_off_delay
+        assert command.to_bytes()[1] == 0x60
+
+    def test_bit_three_is_power_and_pending_across_the_whole_corpus(self):
+        """The one rule that fits every frame, on and off alike."""
+        for capture in CAPTURES:
+            command = Acp35Command.from_raw_timings(capture.timings)
+            assert command is not None, capture.label
+            pending = command.timer_hours > 0 or Acp35Flag.TIMER_UI in command.flags
+            assert command.timer_off_delay == (command.power and pending), capture.label
+
+    def test_reopening_while_off_marks_it_the_same_way(self):
+        command = decode("reopens the display")
+        assert not command.power
+        assert command.timer_hours == 3
+        assert Acp35Flag.TIMER_REOPENED in command.flags
+
+    def test_cancelling_while_off_clears_both_fields(self):
+        command = decode("cancels: hours cleared")
+        assert command.timer_hours == 0
+        assert not command.timer_off_delay
+        assert Acp35Flag.TIMER_UI not in command.flags
+        assert Acp35Flag.TIMER_REOPENED not in command.flags
+
     def test_the_two_cancel_routes_disagree(self):
         """Pressing timer twice disarms; winding down to zero does not."""
         pressed_twice = decode("cancel method 1")
         wound_down = decode("cancel method 2")
         assert pressed_twice.timer_hours == wound_down.timer_hours == 0
-        assert not pressed_twice.timer_armed
-        assert wound_down.timer_armed, "zero hours but still armed"
+        assert not pressed_twice.timer_off_delay
+        assert wound_down.timer_off_delay, "zero hours but still armed"
 
     @pytest.mark.parametrize(
         "label",

@@ -19,7 +19,7 @@
   "entity": {
     "number": {
       "timer_hours": {
-        "name": "Shutdown timer"
+        "name": "Timer"
       }
     }
   }

@@ -1,10 +1,17 @@
-"""Shutdown-timer entity for the Stiebel Eltron ACP 35.
+"""Timer entity for the Stiebel Eltron ACP 35.
 
-The protocol holds the timer in two independent fields: b1 bit 3 arms it and b2
-counts the hours. The remote emits armed-with-zero-hours whenever its entry
-display opens, and again if the hours are wound back down to zero, but that is a
-display state rather than something worth exposing, so this collapses both into
-one control where 0 means off.
+The timer runs in both directions. With the unit running it is an off-delay; with
+the unit stopped it is an on-delay, and it is one of only two buttons the remote
+answers in that state. One control covers both, since which one it is follows the
+power state rather than anything the user selects.
+
+The protocol holds it in two fields: b2 counts the hours and b1 bit 3 says the
+pending timer will switch the unit off. The second is not "a timer is set" -- a
+capture taken with the unit off and three hours pending has b2 = 3 and the bit
+clear -- so ``Acp35Command`` derives it from the power state and this entity only
+sets the hours. The remote emits the bit at zero hours whenever its entry display
+opens, and again if the hours are wound back down to zero, but that is a display
+state rather than something worth exposing, so 0 here means off.
 
 Zero disarms rather than sending armed-with-zero. The remote has two ways to
 cancel and they disagree: pressing TIMER twice clears b1 bit 3, while winding the
@@ -35,7 +42,11 @@ async def async_setup_entry(
 
 
 class Acp35TimerNumber(Acp35Entity, NumberEntity):
-    """Hours until the unit switches itself off. Zero disarms the timer."""
+    """Hours until the unit switches itself over. Zero cancels the timer.
+
+    Which way it switches follows the power state: off if the unit is running,
+    on if it is stopped.
+    """
 
     _attr_translation_key = "timer_hours"
     _attr_entity_category = EntityCategory.CONFIG
@@ -58,20 +69,21 @@ class Acp35TimerNumber(Acp35Entity, NumberEntity):
 
     @override
     async def async_set_native_value(self, value: float) -> None:
-        """Arm the timer for ``value`` hours, or disarm it at zero.
+        """Set the timer to ``value`` hours, or cancel it at zero.
 
-        Arming sends ``TIMER_UI`` because every frame the remote emits carrying
-        a new hour count has it set. There is no separate acceptance frame: the
-        last frame sent while the entry display is open is what commits the
-        value, so a frame without the bit may not register as a timer at all.
+        Setting sends ``TIMER_UI`` because every frame the remote emits carrying
+        a new hour count has it set, with the unit running and stopped alike.
+        There is no separate acceptance frame: the last frame sent while the
+        entry display is open is what commits the value, so a frame without the
+        bit may not register as a timer at all.
 
-        Disarming does not, because it reproduces the remote's TIMER-then-TIMER
+        Cancelling does not, because it reproduces the remote's TIMER-then-TIMER
         cancel: b1 bit 3 clear, b2 zero, no event bit. Winding the hours down to
-        zero instead leaves the remote armed at zero hours with ``TIMER_UI`` set,
-        which is a second, ambiguous way to say the same thing. Sending the flag
-        here would produce a frame matching neither.
+        zero instead leaves the remote holding the bit at zero hours with
+        ``TIMER_UI`` set, which is a second, ambiguous way to say the same thing.
+        Sending the flag here would produce a frame matching neither.
         """
         self._data.state.timer_hours = min(MAX_TIMER_HOURS, max(0, round(value)))
-        # b1 bit 3 still follows the hours; Acp35Command derives it.
+        # b1 bit 3 follows the power state, not the hours; Acp35Command derives it.
         event = Acp35Flag.TIMER_UI if self._data.state.timer_hours else Acp35Flag.NONE
         await self._async_transmit(event)

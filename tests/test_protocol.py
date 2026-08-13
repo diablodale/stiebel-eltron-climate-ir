@@ -81,16 +81,40 @@ class TestFramePacking:
         assert cool_high(flags=flags).to_bytes()[7] == 0xC0
 
 
-class TestTimerArming:
-    """The armed bit and the hours count are independent fields."""
+class TestTimerDirection:
+    """b1 bit 3 says which way a pending timer will switch the unit.
 
-    def test_arming_defaults_to_hours_set(self):
-        assert not cool_high(timer_hours=0).timer_armed
-        assert cool_high(timer_hours=5).timer_armed
+    It is not "a timer is set". A capture taken with the unit off and three
+    hours pending has the hours in b2 and the bit clear, because that timer
+    switches the unit *on*. The same state with the unit running sets it.
+    """
 
-    def test_armed_with_zero_hours_is_representable(self):
-        # The remote emits exactly this while its timer UI is open.
-        state = cool_high(timer_hours=0, timer_armed=True).to_bytes()
+    def test_a_timer_while_running_is_an_off_delay(self):
+        assert cool_high(timer_hours=5).timer_off_delay
+
+    def test_a_timer_while_stopped_is_not(self):
+        stopped = cool_high(power=False, timer_hours=5)
+        assert not stopped.timer_off_delay
+        assert stopped.to_bytes()[1] & 0x08 == 0, "b1 bit 3 must be clear"
+        assert stopped.to_bytes()[2] == 5, "b2 still carries the hours"
+
+    def test_no_timer_means_no_bit_either_way(self):
+        assert not cool_high(timer_hours=0).timer_off_delay
+        assert not cool_high(power=False, timer_hours=0).timer_off_delay
+
+    def test_the_entry_display_counts_as_pending(self):
+        """The remote sets the bit at zero hours while the display is open."""
+        opened = cool_high(timer_hours=0, flags=Acp35Flag.TIMER_UI)
+        assert opened.timer_off_delay
+        assert opened.to_bytes()[2] == 0
+        # ...but only while running, for the same reason as above.
+        assert not cool_high(
+            power=False, timer_hours=0, flags=Acp35Flag.TIMER_UI
+        ).timer_off_delay
+
+    def test_the_bit_can_still_be_forced(self):
+        """from_raw_timings round-trips whatever was actually on the wire."""
+        state = cool_high(power=False, timer_hours=0, timer_off_delay=True).to_bytes()
         assert state[1] & 0x08
         assert state[2] == 0
 
@@ -247,9 +271,9 @@ class TestDecoding:
             original.celsius,
             original.fahrenheit,
         )
-        assert (decoded.timer_hours, decoded.timer_armed) == (
+        assert (decoded.timer_hours, decoded.timer_off_delay) == (
             original.timer_hours,
-            original.timer_armed,
+            original.timer_off_delay,
         )
         assert decoded.flags == original.flags
 
