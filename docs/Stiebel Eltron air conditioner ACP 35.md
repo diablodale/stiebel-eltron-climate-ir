@@ -6,7 +6,7 @@ Assistant, over its infrared remote interface, using the
 added in Home Assistant 2026.6. An emitter integration — ESPHome on the KC868-AG —
 exposes an `InfraredEmitterEntity`, and a consumer integration builds commands
 with `infrared_protocols.commands.Command` and sends them through it. The
-implementation plan is in [docs/ha_ir_platform/plan.md](docs/ha_ir_platform/plan.md).
+implementation plan is in [docs/ha_ir_platform/plan.md](ha_ir_platform/plan.md).
 
 A "clean room" black-box approach was used. Open source tools like ESPHome and a generic
 IR receiver were used to decode the IR codes; avoiding proprietary tools or methods.

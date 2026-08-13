@@ -12,7 +12,7 @@ import pytest
 from pronto import find_pronto_captures, parse_pronto
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROTOCOL_DOC = REPO_ROOT / "Stiebel Eltron air conditioner ACP 35.md"
+PROTOCOL_DOC = REPO_ROOT / "docs" / "Stiebel Eltron air conditioner ACP 35.md"
 
 # Every capture is 151 Pronto words: 4 header words plus 147 durations.
 EXPECTED_WORDS = 151

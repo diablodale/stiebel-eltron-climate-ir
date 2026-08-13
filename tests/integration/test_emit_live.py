@@ -242,7 +242,9 @@ def _capture_named(fragment: str) -> list[int] | None:
     import sys
 
     repo = Path(custom_components.stiebel_eltron_ir.__file__).resolve().parents[2]
-    if not (document := repo / "Stiebel Eltron air conditioner ACP 35.md").is_file():
+    if not (
+        document := repo / "docs" / "Stiebel Eltron air conditioner ACP 35.md"
+    ).is_file():
         return None
 
     sys.path.insert(0, str(repo / "tools"))

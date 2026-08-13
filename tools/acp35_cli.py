@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROTOCOL_DOC = REPO_ROOT / "Stiebel Eltron air conditioner ACP 35.md"
+PROTOCOL_DOC = REPO_ROOT / "docs" / "Stiebel Eltron air conditioner ACP 35.md"
 
 # acp35 is imported as a bare module, not through the stiebel_eltron_ir package,
 # whose __init__ pulls in homeassistant.

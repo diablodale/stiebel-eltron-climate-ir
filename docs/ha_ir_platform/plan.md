@@ -7,7 +7,7 @@ First action: save this plan **unchanged** to `docs/ha_ir_platform/plan.md`.
 ## Context
 
 The ACP 35 is IR-only. Last year the IR protocol was reverse-engineered from 39 Pronto
-captures and documented in [Stiebel Eltron air conditioner ACP 35.md](Stiebel Eltron air conditioner ACP 35.md).
+captures and documented in [Stiebel Eltron air conditioner ACP 35.md](../Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md).
 The goal now is to drive the unit from Home Assistant via the new
 [infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
 (HA 2026.6+), where an emitter integration (ESPHome on the KC868-AG) exposes an
@@ -155,7 +155,7 @@ interaction) also needs the unit to respond, not a capture, so it folds into
 
 ## Phase 1 — Rewrite the protocol doc and tooling
 
-**[Stiebel Eltron air conditioner ACP 35.md](Stiebel Eltron air conditioner ACP 35.md)**
+**[Stiebel Eltron air conditioner ACP 35.md](../Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md)**
 
 - Replace *IR protocol analysis* → *Mode* with the corrected 72-bit / 9-byte spec, the
   `b7` state-vs-event table, and the physical-layer table above.
