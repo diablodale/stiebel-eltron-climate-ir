@@ -46,7 +46,9 @@ from custom_components.stiebel_eltron_ir.acp35 import (
 )
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
+    CONF_MODEL,
     DOMAIN,
+    MODEL_ACP35,
 )
 
 FAKE_EMITTER = "infrared.fake_ir_emitter"
@@ -64,7 +66,7 @@ async def setup_real_chain(hass: HomeAssistant) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Stiebel Eltron ACP 35",
-        data={CONF_EMITTER: FAKE_EMITTER},
+        data={CONF_EMITTER: FAKE_EMITTER, CONF_MODEL: MODEL_ACP35},
         unique_id=FAKE_EMITTER,
     )
     entry.add_to_hass(hass)

@@ -10,6 +10,12 @@ DOMAIN: Final = "stiebel_eltron_ir"
 
 CONF_EMITTER: Final = "emitter"
 CONF_RECEIVER: Final = "receiver"
+CONF_MODEL: Final = "model"
+
+# Which appliance an entry drives. Written into every entry even though there is
+# only one value to write, because the stored shape is the expensive thing to
+# change later and the picker that offers a choice is not.
+MODEL_ACP35: Final = "acp35"
 
 # The unit is cooling-only, so there is no HEAT. OFF is not a mode in the
 # protocol: it clears the power bit and leaves the last mode in b6, exactly as

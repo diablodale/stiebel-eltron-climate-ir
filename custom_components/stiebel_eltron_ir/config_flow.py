@@ -1,4 +1,4 @@
-"""Config flow for the Stiebel Eltron ACP 35."""
+"""Config flow for Stiebel Eltron infrared appliances."""
 
 from typing import Any
 
@@ -12,9 +12,13 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from .const import CONF_EMITTER, CONF_RECEIVER, DOMAIN
+from .const import CONF_EMITTER, CONF_MODEL, CONF_RECEIVER, DOMAIN, MODEL_ACP35
+from .models import MODELS
 
-DEFAULT_TITLE = "Stiebel Eltron ACP 35"
+# The only model there is, so the flow does not ask. When there is a second one
+# this becomes a menu step; a one-item menu is worse than no question at all.
+DEFAULT_MODEL = MODEL_ACP35
+DEFAULT_TITLE = MODELS[DEFAULT_MODEL].default_title
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -51,6 +55,9 @@ class Acp35ConfigFlow(ConfigFlow, domain=DOMAIN):
 
         data = dict(user_input)
         title = data.pop("name", DEFAULT_TITLE) or DEFAULT_TITLE
+        # Recorded even though nothing chose it, so every entry already carries
+        # the field by the time a second model makes it a question.
+        data[CONF_MODEL] = DEFAULT_MODEL
 
         # One entry per emitter: two config entries driving the same emitter
         # would fight over the shadow state.

@@ -2,14 +2,19 @@
 
 from unittest.mock import AsyncMock
 
-from homeassistant.config_entries import SOURCE_USER
+import pytest
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
+from tests.common import MockConfigEntry
 
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
+    CONF_MODEL,
     CONF_RECEIVER,
     DOMAIN,
+    MODEL_ACP35,
 )
 
 from .conftest import CLIMATE_ID, EMITTER_ID
@@ -83,6 +88,59 @@ class TestUserFlow:
         )
         assert result["type"] is FlowResultType.ABORT
         assert result["reason"] == "already_configured"
+
+
+class TestTheModelIsRecorded:
+    """Which appliance an entry drives is stored, even with nothing to choose.
+
+    The flow asks no question -- there is one model -- but the field is written
+    now so every entry already carries it by the time a second model turns it
+    into a question.
+    """
+
+    async def test_the_model_lands_in_entry_data(
+        self, hass: HomeAssistant, emitter: str
+    ) -> None:
+        result = await hass.config_entries.flow.async_configure(
+            (await start(hass))["flow_id"], {CONF_EMITTER: emitter}
+        )
+        assert result["data"][CONF_MODEL] == MODEL_ACP35
+
+    async def test_the_model_is_not_asked_for(
+        self, hass: HomeAssistant, emitter: str
+    ) -> None:
+        """A one-item menu is a worse question than no question."""
+        result = await start(hass)
+        assert CONF_MODEL not in result["data_schema"].schema
+
+    async def test_the_device_reports_the_model(
+        self, hass: HomeAssistant, entry, device_registry: dr.DeviceRegistry
+    ) -> None:
+        device = device_registry.async_get_device_by_identifier(
+            (DOMAIN, entry.entry_id), entry.entry_id
+        )
+        assert device.model == "ACP 35"
+        assert device.manufacturer == "Stiebel Eltron"
+
+
+class TestAnUnsupportedModel:
+    """An entry naming a model this build does not have fails on its own."""
+
+    @pytest.mark.parametrize("model", ["wpl-15", None])
+    async def test_setup_fails_the_entry(
+        self, hass: HomeAssistant, emitter: str, model: str | None
+    ) -> None:
+        data = {CONF_EMITTER: emitter}
+        if model is not None:
+            data[CONF_MODEL] = model
+        config_entry = MockConfigEntry(domain=DOMAIN, data=data, unique_id=emitter)
+        config_entry.add_to_hass(hass)
+
+        assert not await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert config_entry.state is ConfigEntryState.SETUP_ERROR
+        # Failing the entry, not the integration: nothing was half-created.
+        assert hass.states.get(CLIMATE_ID) is None
 
 
 class TestWithoutAReceiver:

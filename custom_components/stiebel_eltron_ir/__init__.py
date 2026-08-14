@@ -19,6 +19,7 @@ from typing import Any, Self, override
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, UnitOfTemperature
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.restore_state import ExtraStoredData
 
 from .acp35 import (
@@ -28,10 +29,9 @@ from .acp35 import (
     effective_fan,
     fahrenheit_to_celsius,
 )
-from .const import CONF_EMITTER, CONF_RECEIVER
+from .const import CONF_EMITTER, CONF_MODEL, CONF_RECEIVER
+from .models import MODELS
 from .receiver import Acp35ReceiverSync
-
-PLATFORMS = [Platform.CLIMATE, Platform.SELECT, Platform.SENSOR]
 
 # How long after transmitting an identical frame counts as our own echo. A frame
 # takes about 90 ms on the wire and the receiver adds its 10 ms idle timeout, so
@@ -218,6 +218,10 @@ class Acp35Data:
 
     emitter_entity_id: str
     receiver_entity_id: str | None
+    # Resolved from the model once at setup and kept, so unload forwards exactly
+    # what setup forwarded. Read from the record again at unload time would be a
+    # different list if the record ever changed under a running entry.
+    platforms: tuple[Platform, ...]
     state: Acp35State = field(default_factory=Acp35State)
     _listeners: list[CALLBACK_TYPE] = field(default_factory=list)
     _sent: deque[tuple[bytes, float]] = field(
@@ -276,10 +280,18 @@ class Acp35Data:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> bool:
-    """Set up one air conditioner from a config entry."""
+    """Set up one appliance from a config entry."""
+    model = entry.data.get(CONF_MODEL)
+    if (info := MODELS.get(model)) is None:
+        # Fails this entry rather than the integration, so the other entries on
+        # the same emitter still load. Reached by an entry written before the
+        # model was recorded, or by one naming a model this build has dropped.
+        raise ConfigEntryError(f"Unsupported model {model!r}")
+
     data = entry.runtime_data = Acp35Data(
         emitter_entity_id=entry.data[CONF_EMITTER],
         receiver_entity_id=entry.data.get(CONF_RECEIVER),
+        platforms=info.platforms,
     )
     # Seed the unit the air conditioner displays from this Home Assistant
     # install's own unit, which is the closest thing to the user's intent we can
@@ -287,7 +299,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> boo
     data.state.display_celsius = (
         hass.config.units.temperature_unit == UnitOfTemperature.CELSIUS
     )
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await hass.config_entries.async_forward_entry_setups(entry, data.platforms)
 
     # Optional. With no receiver configured the integration is complete as it
     # stands; it just cannot notice the physical remote being used.
@@ -300,4 +312,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> boo
 
 async def async_unload_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    return await hass.config_entries.async_unload_platforms(
+        entry, entry.runtime_data.platforms
+    )

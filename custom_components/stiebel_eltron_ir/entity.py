@@ -19,7 +19,8 @@ from .acp35 import (
     effective_fan,
     effective_temperature,
 )
-from .const import DOMAIN
+from .const import CONF_MODEL, DOMAIN
+from .models import MODELS
 
 
 class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
@@ -34,10 +35,11 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         self._data: Acp35Data = entry.runtime_data
         self._listener: CALLBACK_TYPE | None = None
         self._infrared_emitter_entity_id = self._data.emitter_entity_id
+        # The entry is only set up when its model is known, so this cannot miss.
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             manufacturer="Stiebel Eltron",
-            model="ACP 35",
+            model=MODELS[entry.data[CONF_MODEL]].model,
             name=entry.title,
         )
 

@@ -25,8 +25,10 @@ from custom_components.stiebel_eltron_ir.acp35 import (
 )
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
+    CONF_MODEL,
     CONF_RECEIVER,
     DOMAIN,
+    MODEL_ACP35,
 )
 from custom_components.stiebel_eltron_ir.receiver import Acp35ReceiverSync
 
@@ -47,6 +49,7 @@ async def entry_with_receiver(
         data={
             CONF_EMITTER: emitter,
             CONF_RECEIVER: RECEIVER_ID,
+            CONF_MODEL: MODEL_ACP35,
         },
         unique_id=emitter,
     )
@@ -329,6 +332,7 @@ class TestAgainstARealReceiver:
             data={
                 CONF_EMITTER: "infrared.fake_ir_emitter",
                 CONF_RECEIVER: "infrared.fake_ir_receiver",
+                CONF_MODEL: MODEL_ACP35,
             },
             unique_id="infrared.fake_ir_emitter",
         )
@@ -355,6 +359,7 @@ class TestAgainstARealReceiver:
             data={
                 CONF_EMITTER: "infrared.fake_ir_emitter",
                 CONF_RECEIVER: "infrared.fake_ir_receiver",
+                CONF_MODEL: MODEL_ACP35,
             },
             unique_id="infrared.fake_ir_emitter",
         )

@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(tests.__file__).parent / "testing_config"))
 
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
+    CONF_MODEL,
     DOMAIN,
+    MODEL_ACP35,
 )
 
 EMITTER_ID = "infrared.test_emitter"
@@ -72,7 +74,7 @@ async def build_entry(hass: HomeAssistant, emitter: str) -> MockConfigEntry:
     config_entry = MockConfigEntry(
         domain=DOMAIN,
         title="Stiebel Eltron ACP 35",
-        data={CONF_EMITTER: emitter},
+        data={CONF_EMITTER: emitter, CONF_MODEL: MODEL_ACP35},
         unique_id=emitter,
     )
     config_entry.add_to_hass(hass)
