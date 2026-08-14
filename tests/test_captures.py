@@ -23,24 +23,27 @@ GOLDEN = [
     "558A02100000310224", "558A1810000031023A", "558A1810000031033B",
     "558200100000310018", "5560000D0000218265", "5560010D0000218266",
     "5560020D0000218267", "5560030D0000218268", "5560030D0000218369",
-    "5560000D0000218063", "5562000D00003100F5", "5562000D0000318075",
-    "5572000E000031C0C6", "5562000D000031C0B5", "55120003000031C05B",
-    "55220005000031C06D", "55320007000031C07F", "55420009000031C091",
-    "5552000B000031C0A3", "55820010000031C0D8", "55920012000031C0EA",
-    "55A20014000031C0FC", "55B20016000031C00E", "55C20017000031C01F",
-    "55D20019000031C031", "55E2001B000031C043", "5512000300003140DB",
-    "5512000400003140DC", "5522000500003140ED", "55E2001B00003140C3",
-    "558200100000314058", "5542000900002108C9", "5532000800002140F0",
-    "5532000700002140EF", "5522000600002140DE", "5552000A0000214012",
-    "5552000B0000214013", "5562000C0000214024", "5572000E0000214036",
-    "5572000F0000214037", "558200110000214049", "55920012000021405A",
-    "55A20013000021406B", "55A20014000021406C", "55B20015000021407D",
-    "55B20016000021407E", "55C20017000021408F", "55C200180000214090",
-    "55D2001900002140A1", "55D2001A00002140A2", "5562000D0000218065",
-    "5562000D0000118055", "5562000D0000318075", "5562000D0000338077",
-    "5562000D0000128056", "5562000D0000308074", "5562000D0000318075",
-    "55220005000013800F", "5562000D0000128056", "5562000D0000308074",
-    "55220005000031802D",
+    "5560000D0000218063", "556A000D000021826F", "556A010D0000218270",
+    "556A020D0000218271", "556A030D0000218272", "556A040D0000218273",
+    "556A050D0000218274", "556A040D0000118061", "556A040D0000118364",
+    "556A040D0000118364", "5562000D0000118055", "5562000D00003100F5",
+    "5562000D0000318075", "5572000E000031C0C6", "5562000D000031C0B5",
+    "55120003000031C05B", "55220005000031C06D", "55320007000031C07F",
+    "55420009000031C091", "5552000B000031C0A3", "55820010000031C0D8",
+    "55920012000031C0EA", "55A20014000031C0FC", "55B20016000031C00E",
+    "55C20017000031C01F", "55D20019000031C031", "55E2001B000031C043",
+    "5512000300003140DB", "5512000400003140DC", "5522000500003140ED",
+    "55E2001B00003140C3", "558200100000314058", "5542000900002108C9",
+    "5532000800002140F0", "5532000700002140EF", "5522000600002140DE",
+    "5552000A0000214012", "5552000B0000214013", "5562000C0000214024",
+    "5572000E0000214036", "5572000F0000214037", "558200110000214049",
+    "55920012000021405A", "55A20013000021406B", "55A20014000021406C",
+    "55B20015000021407D", "55B20016000021407E", "55C20017000021408F",
+    "55C200180000214090", "55D2001900002140A1", "55D2001A00002140A2",
+    "5562000D0000218065", "5562000D0000118055", "5562000D0000318075",
+    "5562000D0000338077", "5562000D0000128056", "5562000D0000308074",
+    "5562000D0000318075", "55220005000013800F", "5562000D0000128056",
+    "5562000D0000308074", "55220005000031802D",
 ]  # fmt: skip
 
 CAPTURES = load_captures()
@@ -274,6 +277,35 @@ class TestAgainstDocumentedIntent:
         assert not command.timer_off_delay
         assert Acp35Flag.TIMER_UI not in command.flags
         assert Acp35Flag.TIMER_REOPENED not in command.flags
+
+    def test_b2_counts_down_rather_than_reporting_the_value_as_set(self):
+        """The finding that makes a running timer modellable at all.
+
+        A 5 h timer, then an ordinary fan press 90 minutes later with the entry
+        display closed. If b2 reported the value as set it would still read 5.
+        """
+        assert decode("winding to 5 h").timer_hours == 5
+        assert decode("fan pressed 90 minutes later").timer_hours == 4
+
+    def test_a_reopen_carries_the_same_remaining_count(self):
+        """The remote is not holding a finer value it declines to transmit.
+
+        Its display read 4 at the same moment, so what it shows is what it
+        sends.
+        """
+        assert decode("reopening after 90 minutes").timer_hours == 4
+        assert Acp35Flag.TIMER_REOPENED in decode("reopening after 90 minutes").flags
+
+    def test_the_countdown_run_cancels_cleanly(self):
+        command = decode("cancelling the countdown run")
+        assert command.timer_hours == 0
+        assert not command.timer_off_delay
+        assert Acp35Flag.TIMER_UI not in command.flags
+
+    def test_the_countdown_run_kept_the_off_delay_bit_set(self):
+        """The unit was on throughout, so every armed frame is an off-delay."""
+        for fragment in ("winding to 5 h", "fan pressed 90 minutes later"):
+            assert decode(fragment).timer_off_delay, fragment
 
     def test_the_two_cancel_routes_disagree(self):
         """Pressing timer twice disarms; winding down to zero does not."""

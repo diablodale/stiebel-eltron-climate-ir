@@ -649,8 +649,8 @@ Two consequences for the encoder, both open:
 
 ### Known defect: a heard timer is replayed forever
 
-**Status: unresolved, and both available behaviours are wrong.** Recorded so it is
-not rediscovered as a surprise.
+**Status: diagnosed and fixable, not yet fixed.** The capture that decides how is
+in hand; the code change is not written.
 
 The timer is no longer settable from Home Assistant -- it is a disabled-by-default
 diagnostic read-out -- but `b2` and `b1` bit 3 are in every frame, so whatever
@@ -678,16 +678,23 @@ Underneath both sits a constraint no implementation removes: **`b2` holds whole
 hours**, so any frame sent while a timer runs has to round, moving the expiry by
 up to half an hour. A full-state protocol cannot leave a running timer alone.
 
-Resolving it needs the third part of the timer capture sequence below: set a
-timer, wait past an hour boundary, then make an *ordinary* press with the entry
-display closed. If `b2` has decremented, the remote transmits hours remaining and
-we can expire the value locally against the frame's arrival time -- approximately,
-but never resurrecting a timer that has already fired. If `b2` still reads as-set,
-the remaining time cannot be derived from frames at all, and the honest options
-narrow to replaying it or refusing to.
+**Answered 2026-08-13: `b2` counts down.** A 5 hour timer, left 90 minutes, then
+an ordinary fan press with the entry display closed, reads 4. The remote's own
+display read 4 at the same moment, so it transmits the hours still to run rather
+than the value as set. See "b2 counts down" in the protocol document.
 
-The one capture that touches this -- `fan pressed while 3 h counts down` -- does
-not settle it, because how long the timer had been running was not recorded.
+That makes the fix possible: hold a deadline rather than a number, derive
+`timer_hours` from it, and let it reach zero. A stale value can then no longer be
+replayed forever, and an expired timer can no longer be resurrected.
+
+It stays approximate, and that part is structural. The field is whole hours, so a
+frame locates the expiry only within an hour, and re-transmitting the count moves
+the expiry by the remainder -- half an hour, in the capture above. Bounded error
+replaces unbounded, which is the whole of the improvement.
+
+Whether the count is `ceil(remaining)` or a decrement on each whole hour since it
+was set is still unknown; both predict 4 at 90 minutes. They differ only in the
+first minutes after setting, and not in a way that changes the implementation.
 
 ### Open questions the hardware must settle
 
