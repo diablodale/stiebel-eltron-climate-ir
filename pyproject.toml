@@ -1,7 +1,7 @@
 [project]
-name = "stiebel-eltron-acp35-ir"
+name = "stiebel-eltron-ir"
 version = "0.1.0"
-description = "IR protocol decoder/encoder for the Stiebel Eltron ACP 35 air conditioner, and a Home Assistant integration built on it"
+description = "IR protocol decoders/encoders for Stiebel Eltron appliances, and a Home Assistant integration built on them"
 # infrared-protocols requires >=3.14; home-assistant/core requires >=3.14.2.
 # The system python3 on the dev machine is 3.12, so use `uv python install 3.14`.
 requires-python = ">=3.14"

@@ -51,7 +51,7 @@ async def entry_with_receiver(
             CONF_RECEIVER: RECEIVER_ID,
             CONF_MODEL: MODEL_ACP35,
         },
-        unique_id=emitter,
+        unique_id=f"{emitter}_{MODEL_ACP35}",
     )
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
@@ -334,7 +334,7 @@ class TestAgainstARealReceiver:
                 CONF_RECEIVER: "infrared.fake_ir_receiver",
                 CONF_MODEL: MODEL_ACP35,
             },
-            unique_id="infrared.fake_ir_emitter",
+            unique_id=f"infrared.fake_ir_emitter_{MODEL_ACP35}",
         )
         config_entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(config_entry.entry_id)
@@ -361,7 +361,7 @@ class TestAgainstARealReceiver:
                 CONF_RECEIVER: "infrared.fake_ir_receiver",
                 CONF_MODEL: MODEL_ACP35,
             },
-            unique_id="infrared.fake_ir_emitter",
+            unique_id=f"infrared.fake_ir_emitter_{MODEL_ACP35}",
         )
         config_entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(config_entry.entry_id)

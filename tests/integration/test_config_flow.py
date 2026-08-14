@@ -79,15 +79,52 @@ class TestUserFlow:
         assert result["title"] == "Bedroom AC"
         assert "name" not in result["data"], "the name is the title, not config"
 
-    async def test_one_entry_per_emitter(
+
+class TestOneEntryPerEmitterAndModel:
+    """An emitter is claimed for one model, not outright.
+
+    The frame carries no device address, so two appliances of the same model
+    hear one emitter identically and cannot be driven apart. Two different
+    models sharing one blaster is fine: each decoder rejects the other's frames.
+    """
+
+    async def test_the_unique_id_names_both(
+        self, hass: HomeAssistant, emitter: str
+    ) -> None:
+        result = await hass.config_entries.flow.async_configure(
+            (await start(hass))["flow_id"], {CONF_EMITTER: emitter}
+        )
+        entries = hass.config_entries.async_entries(DOMAIN)
+        assert entries[0].unique_id == f"{emitter}_{MODEL_ACP35}"
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    async def test_the_same_emitter_and_model_aborts(
         self, hass: HomeAssistant, entry, emitter: str
     ) -> None:
-        # Two entries on one emitter would fight over the shadow state.
         result = await hass.config_entries.flow.async_configure(
             (await start(hass))["flow_id"], {CONF_EMITTER: emitter}
         )
         assert result["type"] is FlowResultType.ABORT
         assert result["reason"] == "already_configured"
+
+    async def test_another_model_on_the_same_emitter_is_allowed(
+        self, hass: HomeAssistant, emitter: str
+    ) -> None:
+        """Stands in for the second model, which does not exist yet.
+
+        An entry holding the emitter under a different model must not block this
+        one, which is the whole reason the model is in the key.
+        """
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_EMITTER: emitter, CONF_MODEL: "wpl-15"},
+            unique_id=f"{emitter}_wpl-15",
+        ).add_to_hass(hass)
+
+        result = await hass.config_entries.flow.async_configure(
+            (await start(hass))["flow_id"], {CONF_EMITTER: emitter}
+        )
+        assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
 class TestTheModelIsRecorded:

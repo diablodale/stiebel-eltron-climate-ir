@@ -67,7 +67,7 @@ async def setup_real_chain(hass: HomeAssistant) -> MockConfigEntry:
         domain=DOMAIN,
         title="Stiebel Eltron ACP 35",
         data={CONF_EMITTER: FAKE_EMITTER, CONF_MODEL: MODEL_ACP35},
-        unique_id=FAKE_EMITTER,
+        unique_id=f"{FAKE_EMITTER}_{MODEL_ACP35}",
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)

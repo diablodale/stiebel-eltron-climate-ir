@@ -59,9 +59,13 @@ class Acp35ConfigFlow(ConfigFlow, domain=DOMAIN):
         # the field by the time a second model makes it a question.
         data[CONF_MODEL] = DEFAULT_MODEL
 
-        # One entry per emitter: two config entries driving the same emitter
-        # would fight over the shadow state.
-        await self.async_set_unique_id(data[CONF_EMITTER])
+        # One entry per emitter *and model*, not per emitter. The frame carries
+        # no device address -- b0 is the constant 0x55 and b4/b5 are always zero
+        # -- so two appliances of the same model hear one emitter identically and
+        # cannot be driven apart, whatever Home Assistant does. Two different
+        # models sharing one blaster is fine: each decoder rejects the other's
+        # frames on the preamble and the checksum.
+        await self.async_set_unique_id(f"{data[CONF_EMITTER]}_{data[CONF_MODEL]}")
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(title=title, data=data)

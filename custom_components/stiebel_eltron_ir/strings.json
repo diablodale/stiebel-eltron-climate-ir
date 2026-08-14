@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Stiebel Eltron ACP 35",
+        "title": "Stiebel Eltron infrared",
         "description": "Choose the infrared emitter to transmit through. A receiver is optional; without one, changes made with the physical remote will not be noticed.",
         "data": {
           "emitter": "Infrared emitter",
@@ -12,7 +12,7 @@
       }
     },
     "abort": {
-      "already_configured": "This infrared emitter is already used by another air conditioner."
+      "already_configured": "This infrared emitter already drives a Stiebel Eltron of the same model. Two identical appliances cannot be controlled separately, because the protocol carries no device address."
     }
   },
   "entity": {

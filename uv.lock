@@ -144,7 +144,7 @@ wheels = [
 ]
 
 [[package]]
-name = "stiebel-eltron-acp35-ir"
+name = "stiebel-eltron-ir"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

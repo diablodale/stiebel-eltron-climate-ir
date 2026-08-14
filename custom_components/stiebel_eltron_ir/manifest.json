@@ -1,6 +1,6 @@
 {
   "domain": "stiebel_eltron_ir",
-  "name": "Stiebel Eltron ACP 35 (IR)",
+  "name": "Stiebel Eltron (infrared)",
   "codeowners": ["@diablodale"],
   "config_flow": true,
   "dependencies": ["infrared"],

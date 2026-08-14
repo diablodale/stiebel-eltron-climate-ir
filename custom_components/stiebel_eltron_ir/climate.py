@@ -145,7 +145,10 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
     def __init__(self, entry: Acp35ConfigEntry) -> None:
         """Set up the entity."""
         super().__init__(entry)
-        self._attr_unique_id = entry.entry_id
+        # Suffixed like every other entity rather than taking the bare entry id,
+        # so no entity owns the unqualified name and a model with two climate
+        # entities has somewhere to put the second.
+        self._attr_unique_id = f"{entry.entry_id}_climate"
 
     @override
     async def async_added_to_hass(self) -> None:

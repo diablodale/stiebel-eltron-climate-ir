@@ -1,26 +1,37 @@
-# Stiebel Eltron ACP 35 — infrared control for Home Assistant
+# Stiebel Eltron — infrared control for Home Assistant
 
-Drive a Stiebel Eltron ACP 35 air conditioner from Home Assistant over infrared,
-using the [infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
+Drive Stiebel Eltron appliances from Home Assistant over infrared, using the
+[infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
 introduced in Home Assistant 2026.6.
 
-The ACP 35 has no network interface. Its only input is the TZ20160122 handheld
+These appliances have no network interface. Their only input is a handheld
 remote, so the integration reproduces what that remote transmits, byte for byte.
+
+This is the infrared counterpart to Home Assistant core's `stiebel_eltron`
+integration, which speaks modbus to a different range of products. The two do
+not overlap and can be installed together.
+
+## Supported devices
+
+| model | protocol document | remote |
+| ----- | ----------------- | ------ |
+| ACP 35 air conditioner | [Stiebel Eltron air conditioner ACP 35.md](docs/Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md) | TZ20160122 |
 
 ## What is here
 
 | path | contents |
 | ---- | -------- |
 | [custom_components/stiebel_eltron_ir/](custom_components/stiebel_eltron_ir/) | the Home Assistant integration |
-| [custom_components/stiebel_eltron_ir/acp35.py](custom_components/stiebel_eltron_ir/acp35.py) | the protocol encoder and decoder, free of any Home Assistant import |
-| [Stiebel Eltron air conditioner ACP 35.md](docs/Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md) | the protocol itself, and every capture it was derived from |
+| [custom_components/stiebel_eltron_ir/acp35.py](custom_components/stiebel_eltron_ir/acp35.py) | the ACP 35 encoder and decoder, free of any Home Assistant import |
+| [docs/](docs/) | one protocol document per model, each with every capture it was derived from |
 | [docs/ha_ir_platform/plan.md](docs/ha_ir_platform/plan.md) | design decisions, open questions, and what the hardware still has to settle |
 | [docs/ha_ir_platform/devcontainer.md](docs/ha_ir_platform/devcontainer.md) | running Home Assistant from source against this repo |
 | [tools/](tools/) | Pronto decoding, and the capture tooling used with real hardware |
 
 ## Entities
 
-One device with three entities:
+Each configured appliance is one device. Which entities it has depends on the
+model; the ACP 35 has three:
 
 - **climate** — power, mode, fan speed and the temperature setpoint
 - **Appliance temperature unit** (`select`) — which unit the air conditioner shows

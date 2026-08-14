@@ -75,7 +75,7 @@ async def build_entry(hass: HomeAssistant, emitter: str) -> MockConfigEntry:
         domain=DOMAIN,
         title="Stiebel Eltron ACP 35",
         data={CONF_EMITTER: emitter, CONF_MODEL: MODEL_ACP35},
-        unique_id=emitter,
+        unique_id=f"{emitter}_{MODEL_ACP35}",
     )
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
