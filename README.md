@@ -22,7 +22,7 @@ not overlap and can be installed together.
 | path | contents |
 | ---- | -------- |
 | [custom_components/stiebel_eltron_ir/](custom_components/stiebel_eltron_ir/) | the Home Assistant integration |
-| [custom_components/stiebel_eltron_ir/acp35.py](custom_components/stiebel_eltron_ir/acp35.py) | the ACP 35 encoder and decoder, free of any Home Assistant import |
+| [custom_components/stiebel_eltron_ir/devices/](custom_components/stiebel_eltron_ir/devices/) | one subpackage per appliance; each `protocol.py` is an encoder and decoder free of any Home Assistant import |
 | [docs/](docs/) | one protocol document per model, each with every capture it was derived from |
 | [docs/ha_ir_platform/plan.md](docs/ha_ir_platform/plan.md) | design decisions, open questions, and what the hardware still has to settle |
 | [docs/ha_ir_platform/devcontainer.md](docs/ha_ir_platform/devcontainer.md) | running Home Assistant from source against this repo |

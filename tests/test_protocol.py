@@ -1,7 +1,7 @@
 """Unit tests for the ACP 35 frame encoder and decoder."""
 
 import pytest
-from acp35 import (
+from devices.acp35.protocol import (
     BIT_COUNT,
     BIT_MARK,
     CARRIER_HZ,

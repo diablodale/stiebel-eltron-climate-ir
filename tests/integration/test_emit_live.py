@@ -35,7 +35,13 @@ from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
 
 import custom_components.stiebel_eltron_ir
-from custom_components.stiebel_eltron_ir.acp35 import (
+from custom_components.stiebel_eltron_ir.const import (
+    CONF_EMITTER,
+    CONF_MODEL,
+    DOMAIN,
+    MODEL_ACP35,
+)
+from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
     BIT_MARK,
     CARRIER_HZ,
     HEADER_MARK,
@@ -43,12 +49,6 @@ from custom_components.stiebel_eltron_ir.acp35 import (
     ONE_SPACE,
     ZERO_SPACE,
     Acp35Command,
-)
-from custom_components.stiebel_eltron_ir.const import (
-    CONF_EMITTER,
-    CONF_MODEL,
-    DOMAIN,
-    MODEL_ACP35,
 )
 
 FAKE_EMITTER = "infrared.fake_ir_emitter"

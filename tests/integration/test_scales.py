@@ -27,7 +27,7 @@ from homeassistant.const import ATTR_ENTITY_ID, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
 
-from custom_components.stiebel_eltron_ir.acp35 import (
+from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
     MAX_CELSIUS,
     MAX_FAHRENHEIT,
     MIN_CELSIUS,

@@ -12,15 +12,15 @@ from homeassistant.core import CALLBACK_TYPE
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from . import Acp35ConfigEntry, Acp35Data, Acp35RestoreData
-from .acp35 import (
+from ...const import DOMAIN
+from ...data import Acp35ConfigEntry, Acp35Data
+from .protocol import (
     Acp35Command,
     Acp35Flag,
     effective_fan,
     effective_temperature,
 )
-from .const import CONF_MODEL, DOMAIN
-from .models import MODELS
+from .state import Acp35RestoreData
 
 
 class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
@@ -35,11 +35,11 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
         self._data: Acp35Data = entry.runtime_data
         self._listener: CALLBACK_TYPE | None = None
         self._infrared_emitter_entity_id = self._data.emitter_entity_id
-        # The entry is only set up when its model is known, so this cannot miss.
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             manufacturer="Stiebel Eltron",
-            model=MODELS[entry.data[CONF_MODEL]].model,
+            # Resolved at setup, so the record is not imported here. See data.py.
+            model=self._data.model,
             name=entry.title,
         )
 

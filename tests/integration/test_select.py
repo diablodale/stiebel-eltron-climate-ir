@@ -24,7 +24,7 @@ from homeassistant.util.unit_system import (
     UnitSystem,
 )
 
-from custom_components.stiebel_eltron_ir.acp35 import Acp35Flag
+from custom_components.stiebel_eltron_ir.devices.acp35.protocol import Acp35Flag
 
 from .conftest import build_entry, last_command
 

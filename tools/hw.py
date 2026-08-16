@@ -28,11 +28,12 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# acp35 is imported as a bare module, not through the stiebel_eltron_ir package,
-# whose __init__ pulls in homeassistant.
+# The codec is imported as `devices.acp35.protocol`, sidestepping the
+# stiebel_eltron_ir package whose __init__ pulls in homeassistant. Both `devices`
+# packages on that path are deliberately empty for exactly this reason.
 sys.path.insert(0, str(REPO_ROOT / "custom_components" / "stiebel_eltron_ir"))
 
-from acp35 import Acp35Command  # noqa: E402
+from devices.acp35.protocol import Acp35Command  # noqa: E402
 from pronto import to_pronto  # noqa: E402
 
 DEFAULT_JOURNAL = REPO_ROOT / "tests/hardware/journal.jsonl"

@@ -23,7 +23,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
-from custom_components.stiebel_eltron_ir.acp35 import (
+from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
     DEFAULT_CELSIUS,
     Acp35Fan,
     Acp35Flag,

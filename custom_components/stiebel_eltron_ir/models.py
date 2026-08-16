@@ -14,8 +14,12 @@ from dataclasses import dataclass
 from typing import Final
 
 from homeassistant.const import Platform
+from homeassistant.helpers.entity import Entity
 
 from .const import MODEL_ACP35
+from .devices.acp35.climate import Acp35Climate
+from .devices.acp35.select import Acp35DisplayUnitSelect
+from .devices.acp35.sensor import Acp35TimerSensor
 
 
 @dataclass(frozen=True)
@@ -36,11 +40,21 @@ class ModelInfo:
     # then adds nothing.
     platforms: tuple[Platform, ...]
 
+    # What each of those platforms adds. The platform modules at the package root
+    # hold no model knowledge of their own; they exist because Home Assistant
+    # requires a module named for the platform, and they read this.
+    entities: dict[Platform, tuple[type[Entity], ...]]
+
 
 MODELS: Final[dict[str, ModelInfo]] = {
     MODEL_ACP35: ModelInfo(
         model="ACP 35",
         default_title="Stiebel Eltron ACP 35",
         platforms=(Platform.CLIMATE, Platform.SELECT, Platform.SENSOR),
+        entities={
+            Platform.CLIMATE: (Acp35Climate,),
+            Platform.SELECT: (Acp35DisplayUnitSelect,),
+            Platform.SENSOR: (Acp35TimerSensor,),
+        },
     ),
 }

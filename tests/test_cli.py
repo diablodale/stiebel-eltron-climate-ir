@@ -2,8 +2,8 @@
 
 import acp35_cli
 import pytest
-from acp35 import Acp35Command, Acp35Fan, Acp35Mode
 from conftest import PROTOCOL_DOC, load_captures
+from devices.acp35.protocol import Acp35Command, Acp35Fan, Acp35Mode
 
 CAPTURES = load_captures()
 

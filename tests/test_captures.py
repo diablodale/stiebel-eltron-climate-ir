@@ -10,8 +10,8 @@ Two independent kinds of check:
 """
 
 import pytest
-from acp35 import Acp35Command, Acp35Fan, Acp35Flag, Acp35Mode
 from conftest import EXPECTED_CAPTURES, EXPECTED_WORDS, load_captures
+from devices.acp35.protocol import Acp35Command, Acp35Fan, Acp35Flag, Acp35Mode
 
 # Decoded bytes for each capture, in document order. Regression pins.
 GOLDEN = [

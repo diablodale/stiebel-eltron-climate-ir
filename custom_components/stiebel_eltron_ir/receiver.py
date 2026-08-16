@@ -30,10 +30,10 @@ from homeassistant.core import (
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .acp35 import Acp35Command
+from .devices.acp35.protocol import Acp35Command
 
 if TYPE_CHECKING:
-    from . import Acp35Data
+    from .data import Acp35Data
 
 _LOGGER = logging.getLogger(__name__)
 

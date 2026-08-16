@@ -17,18 +17,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from tests.common import MockConfigEntry
 
-from custom_components.stiebel_eltron_ir.acp35 import (
-    Acp35Command,
-    Acp35Fan,
-    Acp35Flag,
-    Acp35Mode,
-)
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
     CONF_MODEL,
     CONF_RECEIVER,
     DOMAIN,
     MODEL_ACP35,
+)
+from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
+    Acp35Command,
+    Acp35Fan,
+    Acp35Flag,
+    Acp35Mode,
 )
 from custom_components.stiebel_eltron_ir.receiver import Acp35ReceiverSync
 
@@ -488,7 +488,7 @@ class TestOwnEchoIsIgnored:
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
     ) -> None:
         """Time-bounded, not a permanent mute on one frame's contents."""
-        from custom_components.stiebel_eltron_ir import ECHO_WINDOW_SECONDS
+        from custom_components.stiebel_eltron_ir.data import ECHO_WINDOW_SECONDS
 
         await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
         sent = last_command(send_command)
