@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import CONF_MODEL
-from .data import Acp35ConfigEntry
+from .data import StiebelEltronIrConfigEntry
 from .models import MODELS
 
 # As for climate -- selecting a display unit transmits the full state too.
@@ -19,7 +19,7 @@ PARALLEL_UPDATES = 1
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: Acp35ConfigEntry,
+    entry: StiebelEltronIrConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Add this model's select entities."""

@@ -26,11 +26,11 @@ ECHO_WINDOW_SECONDS = 1.0
 # flight, and commands arrive in bursts of at most a handful.
 ECHO_MEMORY = 8
 
-type Acp35ConfigEntry = ConfigEntry[Acp35Data]
+type StiebelEltronIrConfigEntry = ConfigEntry[StiebelEltronIrData]
 
 
 @dataclass
-class Acp35Data:
+class StiebelEltronIrData:
     """Everything the platforms share for one configured appliance."""
 
     emitter_entity_id: str

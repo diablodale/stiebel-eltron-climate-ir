@@ -33,7 +33,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from .devices.acp35.protocol import Acp35Command
 
 if TYPE_CHECKING:
-    from .data import Acp35Data
+    from .data import StiebelEltronIrData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class Acp35ReceiverSync:
     """Decode frames from an infrared receiver into the shared shadow state."""
 
     def __init__(
-        self, hass: HomeAssistant, data: Acp35Data, receiver_entity_id: str
+        self, hass: HomeAssistant, data: StiebelEltronIrData, receiver_entity_id: str
     ) -> None:
         """Prepare to follow ``receiver_entity_id``."""
         self._hass = hass

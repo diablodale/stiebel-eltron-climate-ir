@@ -14,12 +14,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
 
 from .const import CONF_EMITTER, CONF_MODEL, CONF_RECEIVER
-from .data import Acp35ConfigEntry, Acp35Data
+from .data import StiebelEltronIrConfigEntry, StiebelEltronIrData
 from .models import MODELS
 from .receiver import Acp35ReceiverSync
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: StiebelEltronIrConfigEntry
+) -> bool:
     """Set up one appliance from a config entry."""
     model = entry.data.get(CONF_MODEL)
     if (info := MODELS.get(model)) is None:
@@ -28,7 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> boo
         # model was recorded, or by one naming a model this build has dropped.
         raise ConfigEntryError(f"Unsupported model {model!r}")
 
-    data = entry.runtime_data = Acp35Data(
+    data = entry.runtime_data = StiebelEltronIrData(
         emitter_entity_id=entry.data[CONF_EMITTER],
         receiver_entity_id=entry.data.get(CONF_RECEIVER),
         platforms=info.platforms,
@@ -51,7 +53,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> boo
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: Acp35ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: StiebelEltronIrConfigEntry
+) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(
         entry, entry.runtime_data.platforms

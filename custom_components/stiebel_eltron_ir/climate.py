@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import CONF_MODEL
-from .data import Acp35ConfigEntry
+from .data import StiebelEltronIrConfigEntry
 from .models import MODELS
 
 # One transmission at a time: every change sends the appliance's whole state,
@@ -20,7 +20,7 @@ PARALLEL_UPDATES = 1
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: Acp35ConfigEntry,
+    entry: StiebelEltronIrConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Add this model's climate entities."""

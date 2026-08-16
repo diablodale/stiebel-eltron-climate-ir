@@ -41,7 +41,7 @@ STEP_USER_SCHEMA = vol.Schema(
 )
 
 
-class Acp35ConfigFlow(ConfigFlow, domain=DOMAIN):
+class StiebelEltronIrConfigFlow(ConfigFlow, domain=DOMAIN):
     """Ask which infrared emitter to transmit through."""
 
     VERSION = 1

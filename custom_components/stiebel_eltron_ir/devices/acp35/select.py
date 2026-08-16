@@ -21,7 +21,7 @@ from typing import override
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
 
-from ...data import Acp35ConfigEntry
+from ...data import StiebelEltronIrConfigEntry
 from .entity import Acp35Entity
 
 CELSIUS = "celsius"
@@ -35,7 +35,7 @@ class Acp35DisplayUnitSelect(Acp35Entity, SelectEntity):
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = [CELSIUS, FAHRENHEIT]
 
-    def __init__(self, entry: Acp35ConfigEntry) -> None:
+    def __init__(self, entry: StiebelEltronIrConfigEntry) -> None:
         """Set up the entity."""
         super().__init__(entry)
         self._attr_unique_id = f"{entry.entry_id}_display_unit"

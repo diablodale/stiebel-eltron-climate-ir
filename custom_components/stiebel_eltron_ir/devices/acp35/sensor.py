@@ -29,7 +29,7 @@ from typing import override
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.const import EntityCategory, UnitOfTime
 
-from ...data import Acp35ConfigEntry
+from ...data import StiebelEltronIrConfigEntry
 from .entity import Acp35Entity
 
 
@@ -46,7 +46,7 @@ class Acp35TimerSensor(Acp35Entity, SensorEntity):
     _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfTime.HOURS
 
-    def __init__(self, entry: Acp35ConfigEntry) -> None:
+    def __init__(self, entry: StiebelEltronIrConfigEntry) -> None:
         """Set up the entity."""
         super().__init__(entry)
         self._attr_unique_id = f"{entry.entry_id}_timer_hours"

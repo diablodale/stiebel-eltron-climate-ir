@@ -18,7 +18,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, callback
 
-from ...data import Acp35ConfigEntry
+from ...data import StiebelEltronIrConfigEntry
 from .entity import Acp35Entity
 from .protocol import (
     MAX_CELSIUS,
@@ -159,7 +159,7 @@ class Acp35Climate(Acp35Entity, ClimateEntity):
             return [ACP_TO_FAN[Acp35Fan.LOW]]
         return self._attr_fan_modes
 
-    def __init__(self, entry: Acp35ConfigEntry) -> None:
+    def __init__(self, entry: StiebelEltronIrConfigEntry) -> None:
         """Set up the entity."""
         super().__init__(entry)
         # Suffixed like every other entity rather than taking the bare entry id,

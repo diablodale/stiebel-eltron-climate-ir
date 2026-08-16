@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from ...const import DOMAIN
-from ...data import Acp35ConfigEntry, Acp35Data
+from ...data import StiebelEltronIrConfigEntry, StiebelEltronIrData
 from .protocol import (
     Acp35Command,
     Acp35Flag,
@@ -29,10 +29,10 @@ class Acp35Entity(InfraredEmitterConsumerEntity, RestoreEntity):
     _attr_has_entity_name = True
     _attr_assumed_state = True
 
-    def __init__(self, entry: Acp35ConfigEntry) -> None:
+    def __init__(self, entry: StiebelEltronIrConfigEntry) -> None:
         """Bind the entity to its config entry and infrared emitter."""
         self._entry = entry
-        self._data: Acp35Data = entry.runtime_data
+        self._data: StiebelEltronIrData = entry.runtime_data
         self._listener: CALLBACK_TYPE | None = None
         self._infrared_emitter_entity_id = self._data.emitter_entity_id
         self._attr_device_info = DeviceInfo(
