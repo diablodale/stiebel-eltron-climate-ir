@@ -5,19 +5,24 @@ named for the manufacturer, not for a product. One record per model keeps the
 facts that differ between them in a single place, so adding a model is an entry
 here rather than a search for the literals that assumed there was only one.
 
-Only the facts with a consumer today are recorded. A codec, an entity list and a
-received-frame handler all belong here eventually, but guessing their shape
-before a second protocol exists is how the wrong interface gets built.
+Only the facts with a consumer today are recorded. The codec itself is not one of
+them: nothing outside a model's own modules reaches for it, and guessing the
+interface a second protocol needs before seeing one is how the wrong abstraction
+gets built.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
+from homeassistant.components.infrared import InfraredReceivedSignal
 from homeassistant.const import Platform
 from homeassistant.helpers.entity import Entity
 
 from .const import MODEL_ACP35
+from .data import StiebelEltronIrData
 from .devices.acp35.climate import Acp35Climate
+from .devices.acp35.receiver import handle_signal as acp35_handle_signal
 from .devices.acp35.select import Acp35DisplayUnitSelect
 from .devices.acp35.sensor import Acp35TimerSensor
 
@@ -45,6 +50,11 @@ class ModelInfo:
     # requires a module named for the platform, and they read this.
     entities: dict[Platform, tuple[type[Entity], ...]]
 
+    # What to do with a frame the receiver heard. Recognising it is part of
+    # knowing the protocol, so the subscription hands every signal here and this
+    # decides whether it belongs to this model at all.
+    handle_signal: Callable[[StiebelEltronIrData, InfraredReceivedSignal], None]
+
 
 MODELS: Final[dict[str, ModelInfo]] = {
     MODEL_ACP35: ModelInfo(
@@ -56,5 +66,6 @@ MODELS: Final[dict[str, ModelInfo]] = {
             Platform.SELECT: (Acp35DisplayUnitSelect,),
             Platform.SENSOR: (Acp35TimerSensor,),
         },
+        handle_signal=acp35_handle_signal,
     ),
 }

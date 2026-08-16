@@ -9,6 +9,8 @@ Which appliance an entry drives is recorded in its data and resolved here; see
 `models.py`. Everything model-specific lives under `devices/`.
 """
 
+from functools import partial
+
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError
@@ -16,7 +18,7 @@ from homeassistant.exceptions import ConfigEntryError
 from .const import CONF_EMITTER, CONF_MODEL, CONF_RECEIVER
 from .data import StiebelEltronIrConfigEntry, StiebelEltronIrData
 from .models import MODELS
-from .receiver import Acp35ReceiverSync
+from .receiver import StiebelEltronIrReceiverSync
 
 
 async def async_setup_entry(
@@ -47,7 +49,9 @@ async def async_setup_entry(
     # Optional. With no receiver configured the integration is complete as it
     # stands; it just cannot notice the physical remote being used.
     if data.receiver_entity_id is not None:
-        sync = Acp35ReceiverSync(hass, data, data.receiver_entity_id)
+        sync = StiebelEltronIrReceiverSync(
+            hass, data.receiver_entity_id, partial(info.handle_signal, data)
+        )
         entry.async_on_unload(sync.async_start())
 
     return True

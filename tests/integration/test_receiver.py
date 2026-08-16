@@ -30,7 +30,8 @@ from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
     Acp35Flag,
     Acp35Mode,
 )
-from custom_components.stiebel_eltron_ir.receiver import Acp35ReceiverSync
+from custom_components.stiebel_eltron_ir.devices.acp35.receiver import handle_signal
+from custom_components.stiebel_eltron_ir.receiver import StiebelEltronIrReceiverSync
 
 from .conftest import CLIMATE_ID, EMITTER_ID, TIMER_ID, last_command
 
@@ -74,9 +75,9 @@ def deliver(hass: HomeAssistant, entry: MockConfigEntry, command: Acp35Command) 
     subscription itself is covered separately, and this keeps the decode path
     under test rather than Home Assistant's plumbing.
     """
-    sync = Acp35ReceiverSync(hass, entry.runtime_data, RECEIVER_ID)
-    sync._handle_signal(
-        InfraredReceivedSignal(timings=command.get_raw_timings(), modulation=38000)
+    handle_signal(
+        entry.runtime_data,
+        InfraredReceivedSignal(timings=command.get_raw_timings(), modulation=38000),
     )
 
 
@@ -249,8 +250,10 @@ class TestIgnoredSignals:
         self, hass: HomeAssistant, entry_with_receiver, description, timings
     ) -> None:
         before = hass.states.get(CLIMATE_ID).state
-        sync = Acp35ReceiverSync(hass, entry_with_receiver.runtime_data, RECEIVER_ID)
-        sync._handle_signal(InfraredReceivedSignal(timings=timings, modulation=38000))
+        handle_signal(
+            entry_with_receiver.runtime_data,
+            InfraredReceivedSignal(timings=timings, modulation=38000),
+        )
         await hass.async_block_till_done()
         assert hass.states.get(CLIMATE_ID).state == before, description
 
@@ -262,8 +265,10 @@ class TestIgnoredSignals:
         timings[3] = -1928  # flip a bit in b0, breaking the preamble and checksum
         before = hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE]
 
-        sync = Acp35ReceiverSync(hass, entry_with_receiver.runtime_data, RECEIVER_ID)
-        sync._handle_signal(InfraredReceivedSignal(timings=timings, modulation=38000))
+        handle_signal(
+            entry_with_receiver.runtime_data,
+            InfraredReceivedSignal(timings=timings, modulation=38000),
+        )
         await hass.async_block_till_done()
         assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == before
 
@@ -272,8 +277,10 @@ class TestIgnoredSignals:
     ) -> None:
         """A real receive buffer starts at the space before the first mark."""
         timings = remote_frame(celsius=26).get_raw_timings()[1:]
-        sync = Acp35ReceiverSync(hass, entry_with_receiver.runtime_data, RECEIVER_ID)
-        sync._handle_signal(InfraredReceivedSignal(timings=timings, modulation=38000))
+        handle_signal(
+            entry_with_receiver.runtime_data,
+            InfraredReceivedSignal(timings=timings, modulation=38000),
+        )
         await hass.async_block_till_done()
         assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 26
 
@@ -285,8 +292,8 @@ class TestSubscription:
         self, hass: HomeAssistant, entry_with_receiver
     ) -> None:
         """A receiver that does not exist must be tolerated, not raise."""
-        sync = Acp35ReceiverSync(
-            hass, entry_with_receiver.runtime_data, "infrared.does_not_exist"
+        sync = StiebelEltronIrReceiverSync(
+            hass, "infrared.does_not_exist", lambda signal: None
         )
         stop = sync.async_start()
         assert sync._unsubscribe is None
@@ -296,7 +303,7 @@ class TestSubscription:
         self, hass: HomeAssistant, entry_with_receiver
     ) -> None:
         """The stub receiver here is only a state, so subscribing is refused."""
-        sync = Acp35ReceiverSync(hass, entry_with_receiver.runtime_data, RECEIVER_ID)
+        sync = StiebelEltronIrReceiverSync(hass, RECEIVER_ID, lambda signal: None)
         stop = sync.async_start()
         assert sync._unsubscribe is None
         stop()
@@ -304,7 +311,7 @@ class TestSubscription:
     async def test_stop_is_idempotent(
         self, hass: HomeAssistant, entry_with_receiver
     ) -> None:
-        sync = Acp35ReceiverSync(hass, entry_with_receiver.runtime_data, RECEIVER_ID)
+        sync = StiebelEltronIrReceiverSync(hass, RECEIVER_ID, lambda signal: None)
         stop = sync.async_start()
         stop()
         sync._async_unsubscribe()

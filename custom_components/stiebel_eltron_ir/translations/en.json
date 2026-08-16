@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Stiebel Eltron infrared",
-        "description": "Choose the infrared emitter to transmit through. A receiver is optional; without one, changes made with the physical remote will not be noticed.",
+        "description": "Choose the infrared emitter to transmit through. A receiver is optional. It lets Home Assistant detect changes made with the physical remote.",
         "data": {
           "emitter": "Infrared emitter",
           "receiver": "Infrared receiver (optional)",
