@@ -1,5 +1,6 @@
 """Climate entity behaviour, asserted on the frames it would transmit."""
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -23,11 +24,16 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
+from custom_components.stiebel_eltron_ir.const import MODEL_ACP35
 from custom_components.stiebel_eltron_ir.devices.acp35.protocol import (
     DEFAULT_CELSIUS,
     Acp35Fan,
     Acp35Flag,
     Acp35Mode,
+)
+from custom_components.stiebel_eltron_ir.devices.acp35.state import (
+    Acp35RestoreData,
+    Acp35State,
 )
 
 from .conftest import CLIMATE_ID, last_command
@@ -214,6 +220,159 @@ class TestFlags:
     ) -> None:
         await call(hass, SERVICE_TURN_ON)
         assert Acp35Flag.CELSIUS in last_command(send_command).flags
+
+
+class TestRestoreIsModelTagged:
+    """A payload is only read back by the model that wrote it.
+
+    Every stored field means something only within one protocol -- mode 2 is dry
+    for this appliance and could be anything for another -- so a payload from
+    elsewhere has to be refused whole rather than read field by field.
+    """
+
+    def test_a_snapshot_names_its_model(self) -> None:
+        data = Acp35RestoreData.from_state(Acp35State())
+        assert data.model == MODEL_ACP35
+        assert data.as_dict()["model"] == MODEL_ACP35
+
+    def test_its_own_payload_survives_the_round_trip(self) -> None:
+        state = Acp35State()
+        state.set_celsius(28)
+        restored = Acp35RestoreData.from_dict(
+            Acp35RestoreData.from_state(state).as_dict()
+        )
+        assert restored is not None
+        assert restored.celsius == 28
+
+    def test_another_model_is_refused(self) -> None:
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        payload["model"] = "wpl-15"
+        assert Acp35RestoreData.from_dict(payload) is None
+
+    def test_no_model_tag_is_corruption_not_another_model(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An untagged payload predates the tag, and no migration reads it."""
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        del payload["model"]
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "no model tag" in caplog.text
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_another_model_is_not_warned_about(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """It is the designed outcome, not a fault.
+
+        Restore data is keyed by entity id, so an entry re-added under a name
+        another model once used finds that model's payload. Refusing it is the
+        point, and a warning would train the user to ignore warnings.
+        """
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        payload["model"] = "wpl-15"
+        with caplog.at_level(logging.DEBUG):
+            assert Acp35RestoreData.from_dict(payload) is None
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert "wpl-15" in caplog.text
+
+    def test_an_unreadable_payload_is_warned_about(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Otherwise it is indistinguishable from a first run."""
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        del payload["celsius"]
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "starting from the defaults" in caplog.text
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("mode", 9),
+            ("celsius", 99),
+            ("celsius", 0),
+            ("fahrenheit", 200),
+            ("timer_hours", 25),
+            ("timer_hours", -1),
+        ],
+    )
+    def test_one_bad_value_refuses_the_whole_payload(
+        self, caplog: pytest.LogCaptureFixture, field: str, value: int
+    ) -> None:
+        """A value this build cannot hold says the writer was not this build.
+
+        Corrupted storage, or a shape from an earlier build that no migration
+        handled -- either way every other field came from that same writer, so
+        keeping the readable ones would assemble a state no build ever held.
+        """
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        payload[field] = value
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "starting from the defaults" in caplog.text
+
+    @pytest.mark.parametrize("entry", [{"9": 1}, {"0": 7}])
+    def test_an_unreadable_speed_refuses_the_whole_payload(
+        self, caplog: pytest.LogCaptureFixture, entry: dict[str, int]
+    ) -> None:
+        """An unknown mode key or an unknown speed, same conclusion."""
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        payload["fan_by_mode"].update(entry)
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "starting from the defaults" in caplog.text
+
+    def test_a_missing_mode_refuses_the_whole_payload(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """This build records a speed for every mode, every time.
+
+        So a payload missing one did not come from this build, and with no
+        migration to read whatever shape it did come from, it is corruption.
+        """
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        del payload["fan_by_mode"][str(int(Acp35Mode.AUTO))]
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "starting from the defaults" in caplog.text
+
+    @pytest.mark.parametrize("speed", [Acp35Fan.MEDIUM, Acp35Fan.HIGH])
+    def test_dry_paired_with_anything_but_low_refuses_the_payload(
+        self, caplog: pytest.LogCaptureFixture, speed: Acp35Fan
+    ) -> None:
+        """The remote runs dry on low and will not move it off.
+
+        Acp35State.set_fan enforces that on every write, so this build cannot
+        have written any other pairing. Storage holding one is corrupt.
+        """
+        payload = Acp35RestoreData.from_state(Acp35State()).as_dict()
+        payload["fan_by_mode"][str(int(Acp35Mode.DRY))] = int(speed)
+        assert Acp35RestoreData.from_dict(payload) is None
+        assert "dry is paired with" in caplog.text
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_every_mode_present_is_accepted(self) -> None:
+        """The whole set, and nothing but, is what a good payload looks like."""
+        state = Acp35State()
+        state.set_fan(Acp35Fan.MEDIUM)
+        restored = Acp35RestoreData.from_dict(
+            Acp35RestoreData.from_state(state).as_dict()
+        )
+        assert restored is not None
+        fresh = Acp35State()
+        restored.apply(fresh)
+        assert fresh.fan_by_mode == state.fan_by_mode
+
+    async def test_a_foreign_payload_leaves_the_defaults(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock
+    ) -> None:
+        """Refusing it must mean untouched defaults, not a half-applied state."""
+        state = entry.runtime_data.state
+        state.set_celsius(28)
+        payload = Acp35RestoreData.from_state(state).as_dict()
+        payload["model"] = "wpl-15"
+
+        fresh = Acp35State()
+        restored = Acp35RestoreData.from_dict(payload)
+        assert restored is None
+        assert fresh.celsius == DEFAULT_CELSIUS
 
 
 class TestRestore:

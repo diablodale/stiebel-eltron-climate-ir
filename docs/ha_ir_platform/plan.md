@@ -403,6 +403,89 @@ writes it, so using the original remote no longer desyncs HA; on a non-match it 
 silently. Subscribing directly, rather than also inheriting `InfraredReceiverConsumerEntity`,
 avoids a diamond over `InfraredConsumerEntity`.
 
+## Adding another device
+
+The integration is named for the manufacturer, not a product. Stiebel Eltron make
+more than one infrared appliance and the next is expected to be another air
+conditioner, though it could be a heater. The layout below was settled on
+2026-08-16 so that adding one is a new directory plus one registry entry rather
+than a search through the code for the literals that assumed there was only one.
+
+### Layout
+
+```text
+custom_components/stiebel_eltron_ir/
+  __init__.py      setup and unload                          integration-wide
+  data.py          StiebelEltronIrData, the entry alias       integration-wide
+  const.py         DOMAIN, CONF_*, MODEL_*                    integration-wide
+  models.py        ModelInfo, MODELS                          integration-wide
+  entity.py        StiebelEltronIrEntity base                 integration-wide
+  receiver.py      StiebelEltronIrReceiverSync lifecycle      integration-wide
+  config_flow.py   StiebelEltronIrConfigFlow                  integration-wide
+  climate.py   \
+  select.py     >  look up the model, add its entities        integration-wide
+  sensor.py    /
+  devices/<model>/
+    protocol.py    the codec                       (no homeassistant import)
+    state.py       the shadow state and its restore payload
+    entity.py      supplies _build_command and the restore pair
+    climate.py     the climate entity and its HVAC/fan maps
+    select.py, sensor.py, receiver.py
+```
+
+### Rules
+
+- **One codec per model at `devices/<model>/protocol.py`**, importing nothing from
+  `homeassistant` and nothing from a sibling model. That is what keeps it
+  contributable to `infrared-protocols`, and what lets the host test suite import
+  it with no Home Assistant present. Both `devices/__init__.py` files are empty
+  for the same reason: anything re-exported there would be imported on that path.
+- **One protocol document per model under `docs/`**, carrying its own captures.
+  The document is the only source of truth for its corpus; register it in
+  `CORPORA` in `tests/conftest.py` with its expected count.
+- **`models.py` must not be imported by the modules it registers.** It imports
+  them, so anything they import must not reach back. This is why an entity reads
+  `self._data.model` rather than looking the record up: `async_setup_entry`
+  resolves the record once and puts what is needed on the runtime data.
+- **Entity translation keys in `strings.json` are shared** across models and stay
+  model-neutral. `appliance_temperature_unit` and `timer_hours` already are. A key
+  whose meaning differs by model gets its own key rather than a reused one.
+- **The restore payload names the model that wrote it**, and `from_dict` refuses
+  anything else. Every stored field means something only within one protocol —
+  `mode` 2 is dry for the ACP 35 and could be anything elsewhere — so a foreign
+  payload is refused whole rather than read field by field.
+- **A config entry is unique on emitter *and* model.** Two appliances of the same
+  model cannot share an emitter, because the frame carries no device address; two
+  different models can, because each codec rejects the other's frames.
+
+### What a heater will need
+
+Not built, but the split above is what makes each of these a local change.
+
+- `hvac_modes` is model data. `HVAC_TO_MODE` and the cooling-only comment live in
+  `devices/acp35/climate.py`; a heater needs `HVACMode.HEAT` and has no dry, and
+  could not share a table with the ACP 35.
+- The `supported_features` rules — temperature hidden outside cool, fan reduced to
+  low in dry, both hidden when powered off — are ACP 35 remote behaviour rather
+  than integration policy, and stay in the model's climate module.
+- The temperature bounds and the two non-inverse conversion tables are ACP 35
+  firmware facts and stay in its `protocol.py`. Another model will have its own
+  range and may have its own tables.
+- The rule that the entity's scale follows the Home Assistant profile rather than
+  the appliance is about how Home Assistant converts, not about any appliance, so
+  it belongs with the shared climate behaviour.
+- A model with no display-unit switch or no timer read-out omits `Platform.SELECT`
+  or `Platform.SENSOR` from its `platforms`, and the root dispatcher adds nothing.
+
+### Still coupled to the ACP 35
+
+Recorded rather than fixed, because a second protocol is what decides the shape:
+
+- `StiebelEltronIrData.state` is typed `Acp35State`. Whether that becomes a type
+  variable or a shared base depends on what the second state object looks like.
+- `async_setup_entry` seeds `state.display_celsius`, which not every model will
+  have. `ModelInfo` gains a state factory when one does not.
+
 ## Settled design decisions
 
 ### Mode-dependent controls are hidden, not shown inert. Settled 2026-08-13
