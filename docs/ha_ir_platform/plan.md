@@ -153,6 +153,12 @@ Everything else a re-capture campaign would have chased (`b7` policy, fan-auto, 
 interaction) also needs the unit to respond, not a capture, so it folds into
 **Verification** below.
 
+> **Phases 1–5 are the original plan, kept as the record of what was intended
+> and why.** Their file paths are no longer the as-built ones: model code moved
+> under `devices/<model>/` and the codec is `devices/acp35/protocol.py`. For the
+> layout and rules as they stand, read "Adding another device" and "Settled
+> design decisions" below instead.
+
 ## Phase 1 — Rewrite the protocol doc and tooling
 
 **[Stiebel Eltron air conditioner ACP 35.md](../Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md)**
@@ -351,6 +357,11 @@ class Acp35Command(Command):          # infrared_protocols.commands.Command
 | `acp35.py` | Phase 3 encoder |
 | `strings.json`, `translations/en.json` | config-flow text |
 
+> **Superseded.** `RestoreEntity` was the wrong mechanism and was replaced on
+> 2026-08-16; see "The shadow state is stored per config entry" under Settled
+> design decisions. The file layout below was also superseded when model code
+> moved under `devices/`. Kept as the record of what was planned.
+
 **`climate.py`** — `Acp35Climate(InfraredEmitterConsumerEntity, ClimateEntity, RestoreEntity)`.
 `InfraredEmitterConsumerEntity` (from `homeassistant.components.infrared.helpers`) already
 provides `_send_command()` and emitter-availability tracking; set
@@ -417,6 +428,7 @@ than a search through the code for the literals that assumed there was only one.
 custom_components/stiebel_eltron_ir/
   __init__.py      setup and unload                          integration-wide
   data.py          StiebelEltronIrData, the entry alias       integration-wide
+  storage.py       StiebelEltronIrStore, the save delay       integration-wide
   const.py         DOMAIN, CONF_*, MODEL_*                    integration-wide
   models.py        ModelInfo, MODELS                          integration-wide
   entity.py        StiebelEltronIrEntity base                 integration-wide
@@ -427,8 +439,8 @@ custom_components/stiebel_eltron_ir/
   sensor.py    /
   devices/<model>/
     protocol.py    the codec                       (no homeassistant import)
-    state.py       the shadow state and its restore payload
-    entity.py      supplies _build_command and the restore pair
+    state.py       the shadow state, its stored payload, and new_state
+    entity.py      supplies _build_command
     climate.py     the climate entity and its HVAC/fan maps
     select.py, sensor.py, receiver.py
 ```
@@ -450,10 +462,24 @@ custom_components/stiebel_eltron_ir/
 - **Entity translation keys in `strings.json` are shared** across models and stay
   model-neutral. `appliance_temperature_unit` and `timer_hours` already are. A key
   whose meaning differs by model gets its own key rather than a reused one.
-- **The restore payload names the model that wrote it**, and `from_dict` refuses
+- **The shadow state is persisted per config entry, never per entity.** One
+  `Store` file keyed by `entry_id`, loaded in `async_setup_entry` before the
+  platforms are forwarded. No entity may inherit `RestoreEntity`: that is keyed by
+  entity id, so a state belonging to the entry ends up stored once per entity, the
+  copies drift, and a rename orphans one of them. Loading before any entity exists
+  is also what makes entity add order irrelevant.
+- **The stored payload names the model that wrote it**, and `from_dict` refuses
   anything else. Every stored field means something only within one protocol —
   `mode` 2 is dry for the ACP 35 and could be anything elsewhere — so a foreign
-  payload is refused whole rather than read field by field.
+  payload is refused whole rather than read field by field. The same applies to
+  any value this build could not have written: absent, out of range, or an enum it
+  does not have. Without a migration, each says the writer was not this build.
+- **Storage is versioned per model**, through `ModelInfo.storage_version`. A file
+  holds one model's payload, so one model changing its shape must not force a
+  conversion on another's files. A version this build cannot read or convert
+  **fails the entry** rather than falling back to defaults: `Store` writes back
+  after migrating, so defaulting would overwrite a newer file and destroy state a
+  re-upgrade could have read.
 - **A config entry is unique on emitter *and* model.** Two appliances of the same
   model cannot share an emitter, because the frame carries no device address; two
   different models can, because each codec rejects the other's frames.
@@ -481,12 +507,41 @@ Not built, but the split above is what makes each of these a local change.
 
 Recorded rather than fixed, because a second protocol is what decides the shape:
 
-- `StiebelEltronIrData.state` is typed `Acp35State`. Whether that becomes a type
-  variable or a shared base depends on what the second state object looks like.
-- `async_setup_entry` seeds `state.display_celsius`, which not every model will
-  have. `ModelInfo` gains a state factory when one does not.
+- The `ShadowState` and `StoredState` aliases in `data.py` still resolve to
+  `Acp35State` and `Acp35RestoreData`. Everything annotates against the aliases
+  rather than the classes, so those two lines are the whole seam: grepping either
+  name finds exactly what a second protocol has to revisit, and whether they
+  become type variables or shared bases depends on what the second pair look
+  like.
 
 ## Settled design decisions
+
+### The shadow state is stored per config entry. Settled 2026-08-16
+
+`RestoreEntity` was the original mechanism and was the wrong one. It is keyed by
+*entity* id, while the shadow state belongs to the config entry, so every entity
+inherited `extra_restore_state_data` and stored the whole state: the climate
+entity persisted the display unit, which is the select's, and the select
+persisted the temperature, fan and timer, which are the climate's. Two complete
+copies, three with the timer read-out enabled.
+
+Duplication was not the whole of it. The copies had independent lifetimes and
+could disagree — renaming an entity changed its restore key and orphaned its
+copy, disabling one stopped it updating, and each expired on its own after seven
+days. And because every entity restored separately over the shared object, one
+copy being refused while another was accepted left the accepted values in place,
+so "a refused payload means defaults" was not a guarantee the code could make.
+
+The justification for the duplication had been that entity add order is not
+guaranteed. That problem only existed because the data was in per-entity storage
+to begin with.
+
+Now: one `Store` file per entry, keyed on `entry_id`, loaded in
+`async_setup_entry` before the platforms are forwarded. Entities persist nothing
+and no longer inherit `RestoreEntity`. Divergence is unrepresentable rather than
+merely unlikely, there is one accept-or-refuse decision, and renaming or
+disabling an entity no longer loses anything. Verified against the hardware: an
+entity id renamed between restarts keeps its state.
 
 ### Mode-dependent controls are hidden, not shown inert. Settled 2026-08-13
 
@@ -571,10 +626,17 @@ host instead of erroring.
 
 | module | asserts |
 | ------ | ------- |
-| `tests/test_config_flow.py` | flow completes with and without a receiver selected; a config entry with no receiver loads and works |
-| `tests/test_climate.py`, `tests/test_number.py` | every service call produces the expected `Acp35Command`; shadow state survives a restart; `OFF` keeps the last mode in `b6`; the two entities share one state without clobbering each other |
-| `tests/test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
-| `tests/test_receiver.py` | feeds recorded remote timings straight into `_handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
+These live in `tests/integration/` and run from ha-core's test tree; see
+[devcontainer.md](devcontainer.md).
+
+| module | asserts |
+| ------ | ------- |
+| `test_config_flow.py` | flow completes with and without a receiver selected; a config entry with no receiver loads and works; the model is recorded, and an unsupported one fails the entry |
+| `test_climate.py`, `test_select.py`, `test_sensor.py` | every service call produces the expected `Acp35Command`; `OFF` keeps the last mode in `b6`; the entities share one state without clobbering each other |
+| `test_storage.py` | the state is stored once per config entry and no entity persists anything; it survives a reload and an entity-id rename; storage this build cannot read or convert fails the entry and leaves the file untouched |
+| `test_scales.py` | the entity drives on the Home Assistant profile's scale while the appliance's own display unit follows the select |
+| `test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
+| `test_receiver.py` | feeds recorded remote timings straight into the model's `handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
 
 ### `-m hardware` — the harness for the device
 
@@ -629,7 +691,7 @@ from the host through the bind mount while Home Assistant is still writing it.
 `tools/hw.py` drives a session from the host: `mark` labels what is about to be pressed,
 `journal` decodes what was heard, `pronto` renders new frames as document-ready blocks.
 The bench never decodes anything itself; that is `hw.py`'s job, using the shipping
-`acp35.py`, so the code validating a capture is the same code that will encode our
+`devices/acp35/protocol.py`, so the code validating a capture is the same code that will encode our
 transmissions rather than a second implementation that could agree with itself.
 
 #### Human answers are recorded, not typed
@@ -651,7 +713,7 @@ identifies the winner instead of five separate confirmations.
 
 | module | marks | settles | how it drives the device |
 | ------ | ----- | ------- | ------------------------ |
-| `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `acp35.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
+| `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `devices/acp35/protocol.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
 | `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
 | `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
 | `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and looks in the bench journal for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the journalled frame decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |

@@ -5,11 +5,13 @@ state. That shape is the same for every model: mutate the shadow state, build on
 frame, send it, and tell the appliance's other entities to redraw. What differs
 is only the frame itself.
 
-So this owns the sequence and the model owns the contents. Two members are left
-for the subclass -- `_build_command`, and the restore pair that names the stored
-shape. Both raise rather than being abstract in the `abc` sense, because Home
-Assistant's entity classes are not abstract base classes and mixing a metaclass
-in is a cost with no return here.
+So this owns the sequence and the model owns the contents. One member is left for the
+subclass -- `_build_command`. It raises rather than being abstract in the `abc`
+sense, because Home Assistant's entity classes are not abstract base classes and
+mixing a metaclass in is a cost with no return here.
+
+Entities persist nothing. The shadow state belongs to the config entry, not to
+any one of its entities, and is loaded and saved there; see `storage.py`.
 """
 
 from typing import Any, override
@@ -17,13 +19,12 @@ from typing import Any, override
 from homeassistant.components.infrared import InfraredEmitterConsumerEntity
 from homeassistant.core import CALLBACK_TYPE
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 
 from .const import DOMAIN
 from .data import StiebelEltronIrConfigEntry, StiebelEltronIrData
 
 
-class StiebelEltronIrEntity(InfraredEmitterConsumerEntity, RestoreEntity):
+class StiebelEltronIrEntity(InfraredEmitterConsumerEntity):
     """Owns the shared shadow state and knows how to transmit it."""
 
     _attr_has_entity_name = True
@@ -43,16 +44,6 @@ class StiebelEltronIrEntity(InfraredEmitterConsumerEntity, RestoreEntity):
             name=entry.title,
         )
 
-    @property
-    @override
-    def extra_restore_state_data(self) -> ExtraStoredData:
-        """Return the snapshot to persist. The model decides what is in it."""
-        raise NotImplementedError
-
-    async def _async_restore_shared_state(self) -> None:
-        """Load the shadow state back from extra data, if there is any."""
-        raise NotImplementedError
-
     def _build_command(self, event: Any = None) -> Any:
         """Return the frame carrying the whole of the current shadow state.
 
@@ -65,14 +56,13 @@ class StiebelEltronIrEntity(InfraredEmitterConsumerEntity, RestoreEntity):
 
     @override
     async def async_added_to_hass(self) -> None:
-        """Restore the shadow state, track the emitter, follow sibling changes.
+        """Track the emitter, and follow what sibling entities change.
 
-        The appliance cannot be asked what it is doing, so the state has to come
-        back from storage. Every entity restores it: they hold the same object
-        and write the same snapshot, and entity add order is not guaranteed.
+        Nothing is restored here. The state was already loaded by the config
+        entry before this entity existed, which is what makes entity add order
+        irrelevant rather than something to work around.
         """
         await super().async_added_to_hass()
-        await self._async_restore_shared_state()
         # Keep one reference to the bound method. Every `self._handle_shared_update`
         # builds a fresh bound-method object, so the identity check that stops us
         # notifying ourselves in _async_transmit would never match otherwise.

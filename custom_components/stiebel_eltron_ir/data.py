@@ -9,12 +9,23 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import CALLBACK_TYPE, callback
 
-from .devices.acp35.state import Acp35State
+from .devices.acp35.state import Acp35RestoreData, Acp35State
+from .storage import SAVE_DELAY_SECONDS, StiebelEltronIrStore
+
+# The two types that are still one model's, named here so the rest of the
+# integration can annotate against them without importing a model, and so that
+# grepping for either finds exactly the places a second protocol has to revisit.
+# Concrete because there is one protocol; a second decides whether these become
+# type variables or shared bases, and inventing either from a single case would
+# be guessing.
+type ShadowState = Acp35State
+type StoredState = Acp35RestoreData
 
 # How long after transmitting an identical frame counts as our own echo. A frame
 # takes about 90 ms on the wire and the receiver adds its 10 ms idle timeout, so
@@ -42,10 +53,16 @@ class StiebelEltronIrData:
     # populate it from importing each other in a circle.
     platforms: tuple[Platform, ...]
     model: str
-    # The one model-specific type still named here. A second protocol is what
-    # decides whether this becomes a type variable or a shared base, and
-    # inventing either before then would be guessing.
-    state: Acp35State = field(default_factory=Acp35State)
+    # Required, with no default. The model builds this through `new_state`, and
+    # that has to stay the only way to obtain one: a default here could only name
+    # a single model's class, so the moment there are two it would hand one
+    # appliance the other's state object and make the annotation above a lie.
+    state: ShadowState
+    # Where the state is persisted, and how to turn it into a payload. Both are
+    # attached by setup rather than passed to the constructor, because the
+    # snapshot function has to close over this object to read the state from it.
+    store: StiebelEltronIrStore | None = None
+    snapshot: Callable[[], dict[str, Any]] | None = None
     _listeners: list[CALLBACK_TYPE] = field(default_factory=list)
     _sent: deque[tuple[bytes, float]] = field(
         default_factory=lambda: deque(maxlen=ECHO_MEMORY)
@@ -96,7 +113,15 @@ class StiebelEltronIrData:
 
     @callback
     def async_notify(self, source: CALLBACK_TYPE | None = None) -> None:
-        """Tell every listener except ``source`` that the state moved."""
+        """Tell every listener except ``source`` that the state moved.
+
+        This is the one signal every change passes through, whether it came from
+        a service call or from a frame the receiver heard, so it is also where
+        the write is scheduled. Delayed rather than immediate: a script setting
+        mode, fan and temperature in succession then writes once.
+        """
+        if self.store is not None and self.snapshot is not None:
+            self.store.async_delay_save(self.snapshot, SAVE_DELAY_SECONDS)
         for listener in list(self._listeners):
             if listener is not source:
                 listener()

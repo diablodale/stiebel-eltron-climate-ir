@@ -1,8 +1,8 @@
 """What the shared entity base leaves to the ACP 35.
 
-The base owns the transmit sequence and the restore ordering; this supplies the
-frame and the stored shape. Every ACP 35 entity builds the same frame -- only the
-b7 event bit differs, according to which control the user touched.
+The base owns the transmit sequence; this supplies the frame. Every ACP 35 entity
+builds the same one -- only the b7 event bit differs, according to which control
+the user touched.
 """
 
 from typing import override
@@ -14,25 +14,10 @@ from .protocol import (
     effective_fan,
     effective_temperature,
 )
-from .state import Acp35RestoreData
 
 
 class Acp35Entity(StiebelEltronIrEntity):
-    """An ACP 35 entity: knows this appliance's frame and stored shape."""
-
-    @property
-    @override
-    def extra_restore_state_data(self) -> Acp35RestoreData:
-        """Persist the whole shadow state, not just what this entity shows."""
-        return Acp35RestoreData.from_state(self._data.state)
-
-    @override
-    async def _async_restore_shared_state(self) -> None:
-        """Load the shadow state from extra data, if there is any."""
-        if (extra := await self.async_get_last_extra_data()) is None:
-            return
-        if (restored := Acp35RestoreData.from_dict(extra.as_dict())) is not None:
-            restored.apply(self._data.state)
+    """An ACP 35 entity: knows how to say this appliance's state on the wire."""
 
     @override
     def _build_command(self, event: Acp35Flag | None = None) -> Acp35Command:

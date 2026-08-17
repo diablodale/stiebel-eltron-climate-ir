@@ -7,9 +7,10 @@ that whole state on every change.
 
 import logging
 from dataclasses import asdict, dataclass, field
-from typing import Any, Self, override
+from typing import Any, Self
 
-from homeassistant.helpers.restore_state import ExtraStoredData
+from homeassistant.const import UnitOfTemperature
+from homeassistant.core import HomeAssistant
 
 from ...const import MODEL_ACP35
 from .protocol import (
@@ -102,15 +103,30 @@ class Acp35State:
         self.celsius = fahrenheit_to_celsius(fahrenheit)
 
 
-@dataclass
-class Acp35RestoreData(ExtraStoredData):
-    """The shadow state, persisted independently of what the entities display.
+def new_state(hass: HomeAssistant) -> Acp35State:
+    """Build the state an appliance starts on when nothing was stored.
 
-    Restoring from displayed attributes cannot work here. The card hides the
-    temperature outside cool and narrows the fan choices in dry, so a restart
-    taken in one of those modes would read back the hidden value and overwrite
-    what the user actually chose. Extra data is written from the state itself,
-    so what is remembered does not depend on what is shown.
+    Only the display unit is worth guessing at. It is seeded from this Home
+    Assistant install's own unit, which is the closest thing to the user's intent
+    knowable without asking; the remote's C/F button overrides it the moment one
+    is heard. Everything else defaults to what the remote itself comes back on.
+
+    A stored payload replaces all of this, so it runs only on a first setup.
+    """
+    return Acp35State(
+        display_celsius=hass.config.units.temperature_unit is UnitOfTemperature.CELSIUS
+    )
+
+
+@dataclass
+class Acp35RestoreData:
+    """The shadow state, in the form the store writes.
+
+    Snapshotted from the state itself rather than from anything an entity
+    displays. The card hides the temperature outside cool and narrows the fan
+    choices in dry, so a snapshot taken from the displayed attributes in one of
+    those modes would record the hidden value and overwrite what the user
+    actually chose.
 
     The payload names the model that wrote it. Every field below means something
     only within this protocol -- `mode` 2 is dry here and could be anything
@@ -149,9 +165,8 @@ class Acp35RestoreData(ExtraStoredData):
             display_celsius=state.display_celsius,
         )
 
-    @override
     def as_dict(self) -> dict[str, Any]:
-        """Return the JSON-serialisable form Home Assistant stores."""
+        """Return the JSON-serialisable form the store writes."""
         return asdict(self)
 
     @classmethod
@@ -160,9 +175,10 @@ class Acp35RestoreData(ExtraStoredData):
 
         Storage outlives the code that wrote it, so a payload this build cannot
         read must leave the defaults in place rather than raise. This is read
-        while the entity is being added, where Home Assistant catches the
-        exception per entity and logs it, so raising would mean the entity never
-        appears at all -- a far worse outcome than starting from the defaults.
+        during `async_setup_entry`, so raising would fail the entry and leave the
+        appliance with no entities at all -- unable to be controlled, over a
+        stale setpoint. Starting from the defaults keeps control working, which
+        is why the refusal is logged rather than silent.
 
         Every check here rejects the *whole* payload, never one field. A value
         out of range or an enum this build does not have says the writer was not
