@@ -1,8 +1,8 @@
 """What the shared entity base leaves to the ACP 35.
 
-The base owns the transmit sequence; this supplies the frame. Every ACP 35 entity
-builds the same one -- only the b7 event bit differs, according to which control
-the user touched.
+The base owns the transmit sequence; this supplies the frame and says what
+sending it did. Every ACP 35 entity builds the same frame -- only the b7 event
+bit differs, according to which control the user touched.
 """
 
 from typing import override
@@ -58,6 +58,31 @@ class Acp35Entity(StiebelEltronIrEntity):
             # whenever the two mappings disagree, as they do at 63 °F.
             celsius=celsius,
             fahrenheit=fahrenheit,
-            timer_hours=state.timer_hours,
+            # No timer, ever. `b2` holds whole hours and counts down, and the
+            # appliance acting on its own timer emits nothing, so a value heard
+            # from the remote cannot be tracked to expiry -- replaying it would
+            # re-arm a timer that had already fired. Sending zero cancels
+            # instead, which is the deliberate cost recorded in
+            # `Acp35TimerSensor`. `timer_hours=0` with no `TIMER_UI` flag also
+            # clears `b1` bit 3, so this is the unambiguous cancel the remote
+            # sends for TIMER twice, not the armed-at-zero shape that winding the
+            # hours down produces.
+            timer_hours=0,
             flags=flags,
         )
+
+    @override
+    def _apply_transmission(self, command: Acp35Command) -> None:
+        """Follow the timer the frame carried, which is always no timer.
+
+        We know the appliance has no timer left, so the read-out says so rather
+        than going on reporting the value it was last told. Without this the
+        sensor would show a timer this integration had just cancelled.
+
+        The timer alone, deliberately. It is the one field `_build_command` puts
+        in the frame without reading it from the state; power and the mode go out
+        verbatim, and the temperature and fan are substituted per mode, so
+        copying those back would replace the setpoint the user chose in cool with
+        the 22 C that dry and auto transmit.
+        """
+        self._data.state.timer_hours = command.timer_hours

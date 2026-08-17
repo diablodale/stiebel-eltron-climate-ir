@@ -760,7 +760,10 @@ minutes after setting.
 What this does settle is that a consumer following the remote can hold a deadline
 rather than a number, count its own copy down, and reach zero. That removes the
 worst failure -- replaying a stale value forever, and re-arming a timer that has
-already fired -- and leaves a bounded error in its place.
+already fired -- and leaves a bounded error in its place. The integration in this
+repository takes the simpler route instead and transmits no timer at all; see
+*The timer is read-only and never replayed* in
+[ha_ir_platform/plan.md](ha_ir_platform/plan.md).
 
 press timer, the countdown run begins at 0 h
 

@@ -26,8 +26,8 @@
       }
     },
     "sensor": {
-      "timer_hours": {
-        "name": "Timer"
+      "last_known_timer": {
+        "name": "Last known timer"
       }
     }
   }

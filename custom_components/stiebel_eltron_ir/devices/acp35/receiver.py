@@ -46,6 +46,8 @@ def handle_signal(data: StiebelEltronIrData, signal: InfraredReceivedSignal) -> 
     state.set_fan(command.fan)
     state.celsius = command.celsius
     state.fahrenheit = command.fahrenheit
+    # Feeds the read-out only. It is never sent back: our own frames carry no
+    # timer, and the next one we send cancels this. See `Acp35TimerSensor`.
     state.timer_hours = command.timer_hours
 
     # b7 bit 7 is the unit the air conditioner is displaying, so follow it. It is

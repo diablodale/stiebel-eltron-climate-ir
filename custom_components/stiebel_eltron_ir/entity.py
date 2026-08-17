@@ -54,6 +54,30 @@ class StiebelEltronIrEntity(InfraredEmitterConsumerEntity):
         """
         raise NotImplementedError
 
+    def _apply_transmission(self, command: Any) -> None:
+        """Record what the frame just sent did to the appliance.
+
+        A full-state frame carries every field, so it can change something no
+        entity asked to change. Where the shadow state has to follow the frame
+        rather than the other way round, the model says so here. Doing nothing is
+        the right default.
+
+        **Copy only the fields the frame is authoritative for, never all of
+        them.** The whole command is passed so a model can pick what it needs,
+        not so it can write the lot back. A frame is not the state: `_build_command`
+        may substitute values on the way out, and the ACP 35 does, transmitting a
+        fixed temperature in dry and auto and a fixed fan speed in dry while the
+        shadow state keeps what the user chose so it returns with the mode.
+        Copying those back would overwrite the user's setpoint the moment they
+        selected dry -- the same damage `StiebelEltronIrData.async_is_own_echo`
+        exists to prevent when the frame comes back off the air, done here by our
+        own hand and too early for that check to see.
+
+        The test is whether the value in the frame came from the state. If it
+        did, writing it back is a no-op; if the model put it there, this is where
+        the state finds out.
+        """
+
     @override
     async def async_added_to_hass(self) -> None:
         """Track the emitter, and follow what sibling entities change.
@@ -80,5 +104,7 @@ class StiebelEltronIrEntity(InfraredEmitterConsumerEntity):
         # apply it back over the state that produced it.
         self._data.async_note_transmission(command.to_bytes())
         await self._send_command(command)
+        # After the send, so a transmission that failed records nothing.
+        self._apply_transmission(command)
         self.async_write_ha_state()
         self._data.async_notify(self._listener)

@@ -158,6 +158,27 @@ class TestItSurvives:
 
         assert hass.states.get(renamed).attributes[ATTR_TEMPERATURE] == 29
 
+    async def test_the_timer_read_out_deliberately_does_not(
+        self, hass: HomeAssistant, entry, send_command: AsyncMock, hass_storage
+    ) -> None:
+        """It reports a frame, and a frame goes stale while the process is down.
+
+        The appliance counts a timer down without saying so, so an hour count
+        written before a restart says nothing about the appliance afterwards.
+        Restoring one would report a timer as current on the strength of a frame
+        heard days earlier.
+        """
+        entry.runtime_data.state.timer_hours = 7
+        entry.runtime_data.async_notify()
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert "timer_hours" not in stored_file(hass_storage, entry)["data"]
+
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.runtime_data.state.timer_hours == 0
+
     async def test_removing_the_entry_deletes_the_file(
         self, hass: HomeAssistant, entry, send_command: AsyncMock, hass_storage
     ) -> None:

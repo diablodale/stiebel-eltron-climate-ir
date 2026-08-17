@@ -292,8 +292,6 @@ class TestRestoreIsModelTagged:
             ("celsius", 99),
             ("celsius", 0),
             ("fahrenheit", 200),
-            ("timer_hours", 25),
-            ("timer_hours", -1),
         ],
     )
     def test_one_bad_value_refuses_the_whole_payload(
@@ -763,18 +761,22 @@ class TestPoweredOffIgnoresControls:
         await call(hass, SERVICE_TURN_ON)
         assert last_command(send_command).power is True
 
-    async def test_a_pending_timer_rides_along_while_off(
+    async def test_a_pending_timer_is_cancelled_while_off(
         self, hass: HomeAssistant, entry, send_command: AsyncMock
     ) -> None:
-        """Both timer fields survive a press that is not a timer press.
+        """Off is where the timer is an on-delay, and it is cancelled too.
 
-        Home Assistant no longer sets the timer, but a value heard from the
-        remote still has to travel in every frame -- clearing it would cancel a
-        timer the user set on the handset.
+        The remote would carry both fields through a press that is not a timer
+        press. We do not, because we cannot see the timer expire and would
+        re-arm one that had already fired. Powering off is not special here; it
+        is the same rule as everywhere else.
         """
         entry.runtime_data.state.timer_hours = 5
         await call(hass, SERVICE_SET_HVAC_MODE, **{ATTR_HVAC_MODE: HVACMode.OFF})
 
         command = last_command(send_command)
-        assert command.timer_hours == 5
+        assert command.timer_hours == 0
+        # b1 bit 3 clear alongside zero hours is the TIMER-twice cancel, not the
+        # armed-at-zero shape that winding the hours down leaves behind.
+        assert command.timer_off_delay is False
         assert command.power is False, "the timer must not power the unit on"

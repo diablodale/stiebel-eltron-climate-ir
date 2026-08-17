@@ -20,8 +20,17 @@ reasons, and the first two are not implementation gaps:
   firing power, mode and fan together at the scheduled moment is the same thing
   -- and keeps accurate time while doing it.
 
-What a timer set on the physical remote does to our frames is a separate,
-unsettled question; see `Acp35State.timer_hours`.
+**Anything changed in Home Assistant cancels a timer set on the remote.** Our
+frames carry `timer_hours=0`, so the first one sent after the remote armed a
+timer clears it. The handset does not hear that frame and goes on displaying the
+timer it set, so the two disagree until the remote is used again.
+
+That is a deliberate cost, chosen against the alternative. Replaying the value we
+last heard is what the remote does, but the remote can do it correctly because it
+counts down internally; we cannot see expiry at all, so replaying produces
+something the remote never produces -- an expired timer re-armed, switching the
+appliance off at a time nobody asked for. Cancelling loses a timer the user set.
+Re-arming shuts the appliance down unbidden, for as long as nobody notices.
 """
 
 from typing import override
@@ -34,14 +43,25 @@ from .entity import Acp35Entity
 
 
 class Acp35TimerSensor(Acp35Entity, SensorEntity):
-    """The hour count in `b2`, as last seen. Not a countdown.
+    """The hour count in `b2`, as last known. Not a countdown.
 
-    Zero means no timer was in the last frame, which is not the same as no timer
-    running: if one was set on the remote out of the receiver's range, or has
-    since expired, this cannot know.
+    It moves on two events, and only those: a frame heard from the remote, which
+    says what timer the remote just set, and a frame of our own, which carries no
+    timer and therefore cancels whatever was set. Between them the value stands
+    still while the appliance counts down behind it.
+
+    So a reading is only as good as its age, and the entity's own
+    `last_reported` is what tells you that: it advances every time a frame
+    confirms the count, while `last_changed` marks when the count last moved.
+    A value hours old is a value about an appliance that has been counting down
+    for hours.
+
+    Zero means no timer was in the last frame we know about, which is not the
+    same as no timer running: one set on the remote out of the receiver's range
+    is invisible here.
     """
 
-    _attr_translation_key = "timer_hours"
+    _attr_translation_key = "last_known_timer"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfTime.HOURS

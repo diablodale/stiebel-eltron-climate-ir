@@ -176,16 +176,21 @@ class TestFollowingTheRemote:
         await hass.async_block_till_done()
         assert float(hass.states.get(TIMER_ID).state) == 8
 
-    async def test_a_followed_timer_rides_along_in_our_frames(
+    @pytest.mark.usefixtures("entity_registry_enabled_by_default")
+    async def test_a_followed_timer_is_cancelled_by_our_next_frame(
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
     ) -> None:
-        """Clearing it would cancel a timer the user set on the handset.
+        """Hearing a timer does not make us replay it.
 
-        Both fields survive a press that is not a timer press -- that is what the
-        remote does -- so a value we heard has to travel in everything we send.
+        The remote carries both fields through a press that is not a timer
+        press, and can do so correctly because it counts down internally. We
+        cannot see expiry at all, so replaying would eventually re-arm a timer
+        that had already fired. We send zero instead, which cancels -- and the
+        read-out follows, because we know what our own frame did.
         """
         deliver(hass, entry_with_receiver, remote_frame(timer_hours=8))
         await hass.async_block_till_done()
+        assert float(hass.states.get(TIMER_ID).state) == 8
 
         await hass.services.async_call(
             CLIMATE_DOMAIN,
@@ -193,7 +198,10 @@ class TestFollowingTheRemote:
             {ATTR_ENTITY_ID: CLIMATE_ID, ATTR_FAN_MODE: "low"},
             blocking=True,
         )
-        assert last_command(send_command).timer_hours == 8
+        command = last_command(send_command)
+        assert command.timer_hours == 0
+        assert command.timer_off_delay is False
+        assert float(hass.states.get(TIMER_ID).state) == 0
 
     async def test_a_fahrenheit_frame_keeps_its_own_pairing(
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock

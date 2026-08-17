@@ -36,12 +36,18 @@ model; the ACP 35 has three:
 - **climate** — power, mode, fan speed and the temperature setpoint
 - **Appliance temperature unit** (`select`) — which unit the air conditioner shows
   on its own display panel
-- **Timer** (`sensor`) — diagnostic, disabled by default, read-only
+- **Last known timer** (`sensor`) — diagnostic, disabled by default, read-only
 
 Infrared is one-way, so the integration keeps a shadow copy of the appliance's
 state and transmits all of it on every change. Entities are `assumed_state`. If an
 infrared receiver is configured it follows the physical remote; without one the
 integration works exactly the same, it just cannot notice the remote being used.
+
+The timer is read-only in both directions: no frame this integration sends carries
+one, so **the first change made in Home Assistant cancels a timer set on the
+remote**. The appliance acting on its own timer emits no infrared, so a timer we
+heard could never be tracked to expiry — retransmitting it would eventually re-arm
+one that had already fired and switch the appliance off unbidden.
 
 ## Status
 

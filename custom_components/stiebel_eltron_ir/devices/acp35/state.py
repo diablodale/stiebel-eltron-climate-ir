@@ -16,7 +16,6 @@ from ...const import MODEL_ACP35
 from .protocol import (
     MAX_CELSIUS,
     MAX_FAHRENHEIT,
-    MAX_TIMER_HOURS,
     MIN_CELSIUS,
     MIN_FAHRENHEIT,
     Acp35Fan,
@@ -63,6 +62,10 @@ class Acp35State:
     )
     celsius: int = 22
     fahrenheit: int = 72
+    # Read-only, and the one field that is never transmitted: our frames carry
+    # `timer_hours=0`, so this only ever holds what the last frame we know about
+    # said -- one heard from the remote, or one of our own cancelling whatever it
+    # had set. Not persisted for that reason; see `Acp35RestoreData`.
     timer_hours: int = 0
     # b7 bit 7: which unit the air conditioner shows on its own display. State
     # rather than configuration -- the remote's C/F button changes it and we
@@ -132,6 +135,12 @@ class Acp35RestoreData:
     only within this protocol -- `mode` 2 is dry here and could be anything
     elsewhere, and `celsius` is bounded by this appliance's range -- so a payload
     from another model must be refused outright rather than read field by field.
+
+    `timer_hours` is deliberately absent. It is a read-out of the last frame we
+    know about, and the appliance counts a timer down without saying so, so a
+    value written before a restart says nothing about the appliance afterwards.
+    Restoring one would report a timer as current on the strength of a frame
+    heard days earlier.
     """
 
     model: str
@@ -140,7 +149,6 @@ class Acp35RestoreData:
     fan_by_mode: dict[str, int]
     celsius: int
     fahrenheit: int
-    timer_hours: int
     display_celsius: bool
 
     @classmethod
@@ -161,7 +169,6 @@ class Acp35RestoreData:
             },
             celsius=state.celsius,
             fahrenheit=state.fahrenheit,
-            timer_hours=state.timer_hours,
             display_celsius=state.display_celsius,
         )
 
@@ -214,7 +221,6 @@ class Acp35RestoreData:
                 },
                 celsius=int(data["celsius"]),
                 fahrenheit=int(data["fahrenheit"]),
-                timer_hours=int(data["timer_hours"]),
                 display_celsius=bool(data["display_celsius"]),
             )
         except (KeyError, TypeError, ValueError, AttributeError) as error:
@@ -247,7 +253,6 @@ class Acp35RestoreData:
         for name, value, low, high in (
             ("celsius", restored.celsius, MIN_CELSIUS, MAX_CELSIUS),
             ("fahrenheit", restored.fahrenheit, MIN_FAHRENHEIT, MAX_FAHRENHEIT),
-            ("timer_hours", restored.timer_hours, 0, MAX_TIMER_HOURS),
         ):
             if not low <= value <= high:
                 return cls._refuse(f"{name} {value!r} is outside {low}..{high}")
@@ -280,5 +285,4 @@ class Acp35RestoreData:
             state.fan_by_mode[stored_mode] = effective_fan(stored_mode, Acp35Fan(fan))
         state.celsius = self.celsius
         state.fahrenheit = self.fahrenheit
-        state.timer_hours = self.timer_hours
         state.display_celsius = self.display_celsius

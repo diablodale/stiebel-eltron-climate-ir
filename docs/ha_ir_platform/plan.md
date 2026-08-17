@@ -440,7 +440,7 @@ custom_components/stiebel_eltron_ir/
   devices/<model>/
     protocol.py    the codec                       (no homeassistant import)
     state.py       the shadow state, its stored payload, and new_state
-    entity.py      supplies _build_command
+    entity.py      supplies _build_command and _apply_transmission
     climate.py     the climate entity and its HVAC/fan maps
     select.py, sensor.py, receiver.py
 ```
@@ -460,8 +460,13 @@ custom_components/stiebel_eltron_ir/
   `self._data.model` rather than looking the record up: `async_setup_entry`
   resolves the record once and puts what is needed on the runtime data.
 - **Entity translation keys in `strings.json` are shared** across models and stay
-  model-neutral. `appliance_temperature_unit` and `timer_hours` already are. A key
-  whose meaning differs by model gets its own key rather than a reused one.
+  model-neutral. `appliance_temperature_unit` and `last_known_timer` already are. A
+  key whose meaning differs by model gets its own key rather than a reused one.
+- **A frame can change the appliance in ways no entity asked for, and the model
+  says so in `_apply_transmission`.** The base owns the transmit sequence and calls
+  it with the frame just sent. Most fields were read out of the shadow state, so
+  the default does nothing; the ACP 35 uses it for the timer, which its frames
+  always cancel.
 - **The shadow state is persisted per config entry, never per entity.** One
   `Store` file keyed by `entry_id`, loaded in `async_setup_entry` before the
   platforms are forwarded. No entity may inherit `RestoreEntity`: that is keyed by
@@ -515,6 +520,68 @@ Recorded rather than fixed, because a second protocol is what decides the shape:
   like.
 
 ## Settled design decisions
+
+### The timer is read-only and never replayed. Settled 2026-08-17
+
+Home Assistant cannot set a timer, and it does not carry one either. Every frame
+we send holds `timer_hours = 0`, so the first change made in Home Assistant after
+the remote armed a timer cancels it. The `Last known timer` sensor is a read-out
+of the last frame we know about and nothing more.
+
+This replaces a defect. The timer had stopped being settable but `b2` and `b1`
+bit 3 still travelled in every frame, so whatever the receiver last heard kept
+being retransmitted:
+
+```text
+t=0     remote sets 3 h          shadow stores 3
+t=1h    any change made in HA    we transmit timer=3, armed
+                                 -> the appliance now switches off at t=4h
+```
+
+**Nothing could clear it.** The appliance acting on its own timer is not a button
+press and emits no infrared, so expiry is invisible to us. Only a cancel heard
+from the remote set it back to zero. `b2` counts down (answered 2026-08-13), so
+the value we replayed was also wrong by however long we had held it.
+
+Replaying was originally kept because it is what the remote does: both fields
+survive a press that is not a timer press (question 5). That reasoning does not
+hold. The remote can replay correctly because it counts down internally. We
+cannot see expiry at all, so replaying the byte without the clock produces
+something the remote never produces — an expired timer re-armed, switching the
+appliance off at a time nobody asked for, for as long as nobody notices.
+
+Both directions lose something, and the choice is which failure to take:
+
+| | what is lost | how it fails |
+| - | ------------ | ------------ |
+| replay | nothing, until a timer expires unseen | the appliance switches off unbidden, unbounded in time |
+| send zero | a timer set on the handset, the moment Home Assistant is touched | the timer does not happen |
+
+Sending zero fails toward *nothing happening*, is explainable in one sentence,
+and needs no unanswered protocol knowledge. The countdown alternative — hold a
+deadline, derive the hours — needs to know whether `b2` is `ceil(remaining)` or a
+decrement on each whole hour, which the captures do not settle, and it stays
+approximate regardless: whole hours locate an expiry only within an hour.
+
+Consequences worth stating:
+
+- **The handset disagrees with the appliance after we cancel.** It does not hear
+  our frame and goes on displaying the timer it set, until it is used again.
+- **`timer_hours = 0` with no `TIMER_UI` flag clears `b1` bit 3**, which is the
+  unambiguous cancel the remote sends for TIMER twice, not the armed-at-zero
+  shape that winding the hours down leaves behind. The derivation in
+  `Acp35Command.__init__` gives this for free.
+- **The read-out follows our own frames.** We know a frame we sent carried no
+  timer, so the sensor reads zero afterwards rather than continuing to report a
+  timer this integration had just cancelled.
+- **It is not persisted.** A value written before a restart says nothing about
+  the appliance afterwards, because the appliance kept counting down. The
+  entity's own `last_reported` is what tells the user how fresh a reading is.
+
+Untested, and question 8 must confirm it: that a frame with `b2 = 0` and `b1`
+bit 3 clear *cancels* an armed timer rather than being treated as no change. The
+remote emits that byte pattern whenever no timer is set, so the appliance
+certainly accepts it; that it clears one is inference.
 
 ### The shadow state is stored per config entry. Settled 2026-08-16
 
@@ -632,8 +699,8 @@ These live in `tests/integration/` and run from ha-core's test tree; see
 | module | asserts |
 | ------ | ------- |
 | `test_config_flow.py` | flow completes with and without a receiver selected; a config entry with no receiver loads and works; the model is recorded, and an unsupported one fails the entry |
-| `test_climate.py`, `test_select.py`, `test_sensor.py` | every service call produces the expected `Acp35Command`; `OFF` keeps the last mode in `b6`; the entities share one state without clobbering each other |
-| `test_storage.py` | the state is stored once per config entry and no entity persists anything; it survives a reload and an entity-id rename; storage this build cannot read or convert fails the entry and leaves the file untouched |
+| `test_climate.py`, `test_select.py`, `test_sensor.py` | every service call produces the expected `Acp35Command`; `OFF` keeps the last mode in `b6`; the entities share one state without clobbering each other; every frame carries no timer, and the read-out follows it to zero |
+| `test_storage.py` | the state is stored once per config entry and no entity persists anything; it survives a reload and an entity-id rename; the timer read-out deliberately does not; storage this build cannot read or convert fails the entry and leaves the file untouched |
 | `test_scales.py` | the entity drives on the Home Assistant profile's scale while the appliance's own display unit follows the select |
 | `test_emit_live.py` | drives live HA against the `fake_ir` stub emitter and asserts the captured µs list against timings decoded from the corresponding `.md` capture. **This is the real encoder proof** — HA → `infrared` → emitter, end to end. It cannot cover `HEADER_MARK`, since no capture contains it |
 | `test_receiver.py` | feeds recorded remote timings straight into the model's `handle_signal()` to exercise the Phase 5 decode path, plus garbage timings that must be ignored silently |
@@ -788,58 +855,11 @@ Two consequences for the encoder, both open:
   is our leading `HEADER_MARK`. The receiver captures a leading mark when there
   is one to capture, so the remote does not appear to send one at all. This is
   the strongest evidence yet on question 7 and may mean `HEADER_MARK = 0`.
-- **`from_raw_timings()` cannot decode our own transmissions.** It tolerates a
-  missing leading mark but not an extra one, so every loopback frame decodes as
-  `None`. Fix before question 10 can assert anything.
-
-### Known defect: a heard timer is replayed forever
-
-**Status: diagnosed and fixable, not yet fixed.** The capture that decides how is
-in hand; the code change is not written.
-
-The timer is no longer settable from Home Assistant -- it is a disabled-by-default
-diagnostic read-out -- but `b2` and `b1` bit 3 are in every frame, so whatever
-value the receiver last heard from the remote keeps travelling in everything we
-send.
-
-**Nothing can clear it.** The appliance acting on its own timer is not a button
-press and emits no infrared, so expiry is invisible to us. Only a cancel frame
-from the remote, heard while the receiver is in range, sets it back to zero.
-
-So:
-
-```text
-t=0     remote sets 3 h          shadow stores 3
-t=1h    any change made in HA    we transmit timer=3, armed
-                                 -> the appliance now switches off at t=4h
-```
-
-The alternative, transmitting zero always, is no better: it cancels a timer the
-user set on the handset the moment anyone touches Home Assistant. Replaying at
-least matches the remote, where both fields survive a press that is not a timer
-press (question 5), which is why it is what the code does.
-
-Underneath both sits a constraint no implementation removes: **`b2` holds whole
-hours**, so any frame sent while a timer runs has to round, moving the expiry by
-up to half an hour. A full-state protocol cannot leave a running timer alone.
-
-**Answered 2026-08-13: `b2` counts down.** A 5 hour timer, left 90 minutes, then
-an ordinary fan press with the entry display closed, reads 4. The remote's own
-display read 4 at the same moment, so it transmits the hours still to run rather
-than the value as set. See "b2 counts down" in the protocol document.
-
-That makes the fix possible: hold a deadline rather than a number, derive
-`timer_hours` from it, and let it reach zero. A stale value can then no longer be
-replayed forever, and an expired timer can no longer be resurrected.
-
-It stays approximate, and that part is structural. The field is whole hours, so a
-frame locates the expiry only within an hour, and re-transmitting the count moves
-the expiry by the remainder -- half an hour, in the capture above. Bounded error
-replaces unbounded, which is the whole of the improvement.
-
-Whether the count is `ceil(remaining)` or a decrement on each whole hour since it
-was set is still unknown; both predict 4 at 90 minutes. They differ only in the
-first minutes after setting, and not in a way that changes the implementation.
+- ~~**`from_raw_timings()` cannot decode our own transmissions.**~~ **Fixed.** It
+  now drops a leading mark longer than a bit mark along with its space, so a
+  frame with our `HEADER_MARK` decodes the same as one without. `test_protocol.py`
+  round-trips `from_raw_timings(get_raw_timings())` and both truncated shapes,
+  so question 10 is no longer blocked on it.
 
 ### Open questions the hardware must settle
 
@@ -918,7 +938,7 @@ value would ship an integration whose controls are confidently mislabelled.
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
 | 7 | Does the unit accept our frame at all, and with which header mark — `5100`, `4400`, `3000`, `9000` or none? | `test_header_mark.py` | `HEADER_MARK = 5100`, the one unmeasured constant |
-| 8 | Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C, timer 1 h / 24 h / cancel? | `test_behaviour.py` | the whole of `const.py`'s enum mapping |
+| 8 | Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C? Every frame we send carries `b2 = 0` with `b1` bit 3 clear: does that **cancel** a timer armed from the remote, or is it treated as no change? | `test_behaviour.py` | the whole of `const.py`'s enum mapping, and the read-only timer decision above |
 | 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
 
 Why this order: until the unit responds to anything, neither of the others can be
