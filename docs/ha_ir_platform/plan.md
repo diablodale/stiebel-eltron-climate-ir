@@ -691,8 +691,6 @@ dependency group carries only an HTTP client and not `aioesphomeapi`.
 Guarded by a module-level `pytest.importorskip("homeassistant")` so they simply skip on the
 host instead of erroring.
 
-| module | asserts |
-| ------ | ------- |
 These live in `tests/integration/` and run from ha-core's test tree; see
 [devcontainer.md](devcontainer.md).
 
@@ -861,6 +859,96 @@ Two consequences for the encoder, both open:
   round-trips `from_raw_timings(get_raw_timings())` and both truncated shapes,
   so question 10 is no longer blocked on it.
 
+### Known issue: the development host's clock is unusable for measurement
+
+**Diagnosed 2026-08-17, mitigated, not fixed.** The corrected clocks run fast and
+the wall clock steps backwards several times a minute, so a timestamp or an
+interval taken on the host does not mean what it says. One clock is exempt, and
+that exemption is the workaround.
+
+**The hardware is fine; the correction on top of it is not.** `CLOCK_MONOTONIC_RAW`
+reads the clocksource with no NTP or tick adjustment applied, and across three
+90 s runs against a raw SNTP query to ntp.ubuntu.com it measured 0.9986, 1.0004
+and 1.0028 — accurate to about 0.3%, which is the precision of the SNTP
+round-trip estimate rather than a bound on the clock. Everything derived from it
+after correction is worse, and unstable between runs:
+
+| clock | vs NTP | |
+| ----- | ------ | - |
+| `CLOCK_MONOTONIC_RAW` | 1.0004 | the clocksource, uncorrected — **sound** |
+| `CLOCK_MONOTONIC` | 1.0084 – 1.0946 | fast, and never steps back to compensate |
+| `CLOCK_REALTIME` | 0.9996 – 1.0039 | right on average only because it is stepped backwards |
+
+The lever being misused is `tick`, the microseconds of time the kernel credits
+per timer tick. Its default is 10000 and its range is ±10%. Sampling it finds it
+rewritten every few seconds and never left at the default: one 90 s window held
+23 changes oscillating between 9389 and 10243. **Setting it back by hand does
+nothing** — an `adjtimex` write of 10000 was overwritten within about two
+seconds. Because `tick` is applied above the clocksource, swapping between
+`hyperv_clocksource_tsc_page`, `hyperv_clocksource_msr` and `acpi_pm` changes
+nothing; all three measured 7–9.5% fast. **Keep the default clocksource.**
+
+The cause is two time disciplines fighting. WSL forces Hyper-V implicit time
+synchronization on — `hv_utils.timesync_implicit=1` is in `/proc/cmdline` and
+cannot reliably be overridden through `.wslconfig` on current versions — and
+Ubuntu ships systemd-timesyncd, which disciplines the same clock against
+ntp.ubuntu.com. Neither can win: correcting a percent-scale error needs far more
+than the 500 ppm `adjtimex` frequency cap, so both reach for `tick`, and it
+saturates.
+
+**Mitigation applied: systemd-timesyncd is disabled on this machine**
+(`timedatectl set-ntp false`), which is what [Ubuntu's own WSL
+guidance](https://documentation.ubuntu.com/wsl/latest/explanation/time-sync/)
+recommends — the guest takes its time from the host, so a second NTP client only
+conflicts. Measured effect: `CLOCK_MONOTONIC`'s error fell from about 9% to 2.4%
+and `CLOCK_REALTIME`'s average rate went from 1.0039 to 0.9996. The backward
+steps continue, roughly three per 90 s, and the tick is still driven, so this
+reduces the problem rather than removing it. The guest now depends entirely on
+the Windows clock, which measured within 0.2% of ntp.ubuntu.com.
+
+Environment, for a bug report: WSL 2.7.11.0, kernel 6.18.33.2-2, Windows
+10.0.26200.9168. `wsl --shutdown` does not clear it.
+
+#### What is unaffected
+
+**Every infrared measurement.** Durations come from the ESP32's RMT peripheral
+over the native API and are timed by the device, never by the host. The capture
+corpus, the protocol document and everything `tests/test_captures.py` asserts
+stand. Any conclusion drawn from frame *contents* rather than from arrival times
+is likewise unaffected, which is all of Phases 1–5.
+
+**The test suites.** Nothing under `tests/` measures elapsed time — no
+`monotonic`, no `freezer`, no `async_fire_time_changed`, no sleeps.
+
+**The integration in normal use.** `ECHO_WINDOW_SECONDS = 1.0` is really about
+0.98 s of real time and `SAVE_DELAY_SECONDS = 10` fires after about 9.8 s. Both
+are deliberately generous and neither is near a threshold that matters.
+
+#### Rules while this stands
+
+- **Measure durations with `CLOCK_MONOTONIC_RAW`.** In Python that is
+  `time.clock_gettime(time.CLOCK_MONOTONIC_RAW)`, not `time.monotonic()`, which
+  is the corrected clock and runs 2.4% fast. This is the workaround that makes
+  host-side timing possible at all here, and it costs nothing anywhere else: on a
+  healthy machine the two agree.
+- **Order the journal by `index`, never by `at`.** The index is assigned in the
+  same callback that reads the clock, so it always reflects delivery order; `at`
+  does not. The corpus holds three such inversions, up to 0.98 s, all from
+  2026-08-17.
+- **Never derive a duration from a wall-clock timestamp.** That means journal
+  `at` values, Home Assistant's `last_changed` and `last_reported`, and the
+  infrared receiver entity's state, which is itself a timestamp. `CLOCK_REALTIME`
+  still steps backwards, so subtracting two of them can yield a negative
+  interval.
+- **Question 9 is answerable, on `CLOCK_MONOTONIC_RAW` only.** Its measurement is
+  a host-scheduled separation between frames; on `time.monotonic()` every
+  interval would be 2.4% shorter than the figure written down, and on wall-clock
+  timestamps it would be meaningless. Record in the protocol document which clock
+  produced the numbers.
+- **Prefer evidence that lives in the frame.** Anything the ESP32 timed is sound.
+  Where a question can be answered from frame contents instead of from timing,
+  answer it that way.
+
 ### Open questions the hardware must settle
 
 Accumulated across Phases 3–5. Each one is a place where the code had to assume
@@ -979,6 +1067,12 @@ better than one step per value.
 Not answerable from captures: the 10.1 ms tail on every one is ESPHome's receive
 idle timeout, not something the remote emitted, so the true inter-frame gap has
 never been observed.
+
+**Time both procedures on `CLOCK_MONOTONIC_RAW`.** Each measures a separation the
+host schedules, and on this machine `time.monotonic()` runs 2.4% fast while the
+wall clock steps backwards several times a minute. Only the raw clock is sound.
+See *Known issue: the development host's clock is unusable for measurement*, and
+say in the protocol document which clock produced the numbers.
 
 Two things to try, once 8 has established that the unit reliably acts on a command
 sent in isolation — without that baseline a missed frame here is unattributable:
