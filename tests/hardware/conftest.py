@@ -34,8 +34,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from devices.acp35.protocol import Acp35Command
-from hw import DEFAULT_HA_URL, MIN_FRAME_DURATIONS, SIMULATED_PREFIX, load_dotenv
+from devices.acp35.protocol import Acp35Command, Acp35Fan, Acp35Mode
+from hw import (
+    DEFAULT_HA_URL,
+    MIN_FRAME_DURATIONS,
+    SIMULATED_PREFIX,
+    load_dotenv,
+    order_records,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -52,6 +58,16 @@ FRAME_TIMEOUT = 5.0
 
 BENCH_DOMAIN = "acp35_bench"
 
+# Naming where to put the appliance back is how a session consents to driving it.
+# One variable rather than two, because being able to state the restore point and
+# being willing to disturb the appliance are the same judgement, and a run that
+# cannot say where the appliance was should not be moving it.
+#
+#   HW_RESTORE="on,cool,medium,21" uv run pytest -m hardware
+#
+RESTORE_ENV = "HW_RESTORE"
+RESTORE_FORMAT = "power,mode,fan,celsius -- e.g. on,cool,medium,21"
+
 
 def _now() -> float:
     """Return a monotonic reading that is not wrong on this development host.
@@ -63,15 +79,47 @@ def _now() -> float:
     return time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark everything collected from this directory as `hardware`.
+def parse_restore(value: str) -> Acp35Command:
+    """Build the frame that puts the appliance back where it was found."""
+    parts = [field.strip().lower() for field in value.split(",")]
+    if len(parts) != 4:
+        raise ValueError(f"{RESTORE_ENV} must be {RESTORE_FORMAT}, got {value!r}")
+    power, mode, fan, celsius = parts
+    if power not in ("on", "off"):
+        raise ValueError(f"power must be on or off, got {power!r}")
+    return Acp35Command(
+        power=power == "on",
+        mode=Acp35Mode[mode.upper()],
+        fan=Acp35Fan[fan.upper()],
+        celsius=int(celsius),
+    )
 
-    Structural rather than conventional: a test that forgets the marker would
-    otherwise run during `uv run pytest` and start transmitting.
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark everything here `hardware`, and hold back what would move the unit.
+
+    The `hardware` marker is structural rather than conventional: a test that
+    forgot it would otherwise run during `uv run pytest` and start transmitting.
+
+    `disruptive` needs more than that. Selecting a test is not the same as
+    consenting to it moving an appliance somebody is relying on -- ours cools a
+    room -- so those are skipped unless the session says where to put it back.
+    Being able to name the restore point is the consent.
     """
+    restore = os.environ.get(RESTORE_ENV)
     for item in items:
-        if HERE in Path(str(item.fspath)).parents:
-            item.add_marker(pytest.mark.hardware)
+        if HERE not in Path(str(item.fspath)).parents:
+            continue
+        item.add_marker(pytest.mark.hardware)
+        if item.get_closest_marker("disruptive") and not restore:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason=(
+                        f"would command the appliance; set {RESTORE_ENV} to the "
+                        f"state to restore it to ({RESTORE_FORMAT})"
+                    )
+                )
+            )
 
 
 class HomeAssistant:
@@ -206,21 +254,22 @@ class Journal:
         """Every record, oldest first."""
         if not self.path.is_file():
             return []
-        records = []
+        raw_records = []
         for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            data = json.loads(line)
-            records.append(
-                Record(
-                    seq=data.get("seq", -1),
-                    kind=data["kind"],
-                    raw=data.get("raw", 0.0),
-                    data=data,
-                )
+            if line.strip():
+                raw_records.append(json.loads(line))
+        return [
+            Record(
+                seq=data.get("seq", -1),
+                kind=data["kind"],
+                raw=data.get("raw", 0.0),
+                data=data,
             )
-        records.sort(key=lambda record: record.seq)
-        return records
+            # Shared with tools/hw.py rather than reimplemented: a reader that
+            # ordered the journal differently from the one rendering it would
+            # make two accounts of the same session.
+            for data in order_records(raw_records)
+        ]
 
     def last_seq(self) -> int:
         """The highest sequence number written so far."""
@@ -389,3 +438,28 @@ def confirm(ask: Callable[..., str]) -> Callable[[str], bool]:
         return ask(question, ("yes", "no")) == "yes"
 
     return _confirm
+
+
+@pytest.fixture(scope="session")
+def appliance(send: Callable[..., Sent]) -> Iterator[Acp35Command]:
+    """Consent to moving the appliance, and put it back afterwards.
+
+    Every test that transmits something a listening appliance would act on must
+    request this and carry the `disruptive` marker. The fixture yields the state
+    the session promised to restore, so a test can also say what it is disturbing.
+
+    Restoring is best effort by nature: the protocol carries no acknowledgement,
+    so a frame that the unit missed leaves it wherever the last one it did hear
+    put it. Sending the restore frame three times costs a fraction of a second and
+    makes that much less likely. It is not a substitute for looking at the unit
+    when a session ends.
+    """
+    described = os.environ[RESTORE_ENV]
+    state = parse_restore(described)
+    yield state
+    send(
+        state.get_raw_timings(),
+        label=f"restoring the appliance to {described}",
+        count=3,
+        gap=0.4,
+    )

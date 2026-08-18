@@ -43,10 +43,19 @@ from infrared_protocols.commands import Command
 # earlier analysis was that constant round-tripped through a 4-digit hex code.
 CARRIER_HZ = 38000
 
-# UNVERIFIED. Every capture's receive buffer begins at the header *space*; the
-# mark before it was never recorded, and a fresh capture would very likely miss
-# it the same way. Bisect this against the real unit, in order:
-#   5100 (symmetric with the space), 4400, 3000, 9000, 0 (no header at all).
+# Verified against the appliance 2026-08-18. No capture could settle it: every
+# receive buffer begins at the header *space*, the mark before it never having
+# been recorded. So the five candidates were transmitted at the unit, each
+# carrying its own setpoint, and the panel was read: it showed the setpoint
+# belonging to 5100, which was sent first, so nothing sent after it was accepted
+# as the command it carried. 4400, 3000, 9000 and no header at all set nothing --
+# which is not the same as being ignored: a wrong header can leave the unit's bit
+# sampling shifted, and it was seen acting on a command that was never sent.
+#
+# The loopback pointed the other way and was wrong. Our frames come back one
+# duration longer than the remote's, which suggested the remote sends no header
+# mark; the unit rejects a headerless frame outright. The mark is real, the
+# receiver simply never records it.
 HEADER_MARK = 5100
 
 HEADER_SPACE = 5100  # measured 5024..5102

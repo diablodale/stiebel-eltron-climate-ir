@@ -66,24 +66,47 @@ def load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-def read_journal(path: Path) -> list[dict[str, Any]]:
-    """Return every record in the journal, oldest first.
+def order_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the records in the order they were created.
 
-    Sorted by ``seq``, which the bench assigns on the event loop as each record
-    is created. Neither of the alternatives is safe: the writes go through an
-    executor and can reach the file out of order, and ``at`` is a wall clock that
-    steps backwards on this development host, which has produced records whose
-    timestamps run a second backwards. Records written before ``seq`` existed
-    keep their file order and sort first, which is where they belong.
+    ``seq`` is assigned by the bench on the event loop as each record is created,
+    and is the only ordering that can be trusted within a run: the writes go
+    through an executor and can reach the file out of order, and ``at`` is a wall
+    clock that steps backwards on this development host.
+
+    Across runs it needs help. The bench now continues the sequence from what the
+    journal holds, but older files restart at 1 on every Home Assistant restart,
+    so sorting the whole file by `seq` interleaves sessions -- a night's records
+    ended up scattered among the previous night's. A sequence that goes backwards
+    is therefore read as a new run: sort within each run, and keep the runs in the
+    order the file has them.
     """
+    runs: list[list[dict[str, Any]]] = []
+    previous = None
+    for record in records:
+        seq = record.get("seq", -1)
+        if previous is None or seq < previous:
+            runs.append([])
+        runs[-1].append(record)
+        previous = seq
+    return [
+        record
+        for run in runs
+        # Records written before `seq` existed keep their file order, which for
+        # a single run is the order they were created in anyway.
+        for record in sorted(run, key=lambda r: r.get("seq", -1))
+    ]
+
+
+def read_journal(path: Path) -> list[dict[str, Any]]:
+    """Return every record in the journal, oldest first."""
     if not path.is_file():
         return []
     records = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             records.append(json.loads(line))
-    records.sort(key=lambda record: record.get("seq", -1))
-    return records
+    return order_records(records)
 
 
 def since_last_mark(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

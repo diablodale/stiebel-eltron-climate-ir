@@ -787,7 +787,7 @@ identifies the winner instead of five separate confirmations.
 
 | module | marks | settles | how it drives the device |
 | ------ | ----- | ------- | ------------------------ |
-| `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `devices/acp35/protocol.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
+| `tests/hardware/test_header_mark.py` | `hardware, manual, disruptive` | 7 | **Written, and answered.** Sends each candidate as the appliance's own state with one field changed — the setpoint — so an accepted frame moves the temperature and nothing else. No power cycling. Two passes in opposite orders; the panel identifies the winner. If all fail, vary `CARRIER_HZ` too |
 | `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
 | `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
 | `tests/hardware/test_loopback.py` | `hardware` | 10 | **Written, and passing.** Fully automatic. A session fixture transmits once and skips everything if nothing comes back. Otherwise each of the 76 distinct corpus frames is re-encoded, sent, and the journalled capture decoded and compared with what the remote produced for that state |
@@ -1073,13 +1073,30 @@ value would ship an integration whose controls are confidently mislabelled.
 
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
-| 7 | Does the unit accept our frame at all, and with which header mark — `5100`, `4400`, `3000`, `9000` or none? | `test_header_mark.py` | `HEADER_MARK = 5100`, the one unmeasured constant |
+| ~~7~~ | ~~Does the unit accept our frame, and with which header mark?~~ **Answered 2026-08-18: `HEADER_MARK = 5100`, the shipped value.** Each candidate went out carrying its own setpoint; the panel showed 22 °C, which belongs to 5100 — sent **first**, so nothing sent after it was accepted as a command. 4400, 3000, 9000 and no header at all did not set the setpoint. That is narrower than "were ignored": the descending pass showed a wrong header can still make the unit act, on something other than what was sent. Every transmission is confirmed in the journal, so the unit's silence is established rather than assumed | — | — |
 | 8 | Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C? Every frame we send carries `b2 = 0` with `b1` bit 3 clear: does that **cancel** a timer armed from the remote, or is it treated as no change? | `test_behaviour.py` | the whole of `const.py`'s enum mapping, and the read-only timer decision above |
 | 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
 
 Why this order: until the unit responds to anything, neither of the others can be
-attempted, so 7 leads. 8 then establishes that a given command is acted on, which 9
+attempted, so 7 led. 8 then establishes that a given command is acted on, which 9
 depends on — "did it act on the frame" is the measurement 9 repeats at shrinking gaps.
+
+**A wrong header mark is not simply ignored.** Answering 7 produced one result
+nobody asked for: during the descending pass the appliance went to auto with a low
+fan, although every frame sent carried cool and medium. Nothing else transmits, so
+the unit acted on a command we did not send — most likely a wrong header leaving
+its bit sampling shifted, so the same waveform decodes as something else. Two
+consequences:
+
+- **Never ship an unverified header mark.** A wrong one can drive the appliance
+  somewhere unintended rather than doing nothing.
+- **The setpoint only works as a carrier while the unit stays in cool**, since auto
+  and dry pin it. `test_header_mark.py` now takes `changed` as an answer and fails
+  that pass instead of recording a number that identifies nothing.
+
+The descending pass is therefore unanswered. It would say whether more than one
+header mark is accepted; 5100 being accepted and the four sent after it being
+refused does not depend on it.
 
 **Questions 10–15: everything else.** Each would refine behaviour at the edges or let
 a restriction be lifted, and each has a defensible answer already committed to code,

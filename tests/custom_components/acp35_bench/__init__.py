@@ -182,6 +182,27 @@ class _Journal:
         self._path = Path(path)
         self._seq = 0
 
+    def resume(self) -> int:
+        """Continue the sequence from what the journal already holds.
+
+        Runs in an executor: this reads the whole file. Without it the count
+        restarts at 1 on every Home Assistant restart, and a reader sorting the
+        file by `seq` interleaves sessions -- which happened, and hid a session's
+        records among the previous night's.
+        """
+        if not self._path.is_file():
+            return self._seq
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                self._seq = max(self._seq, json.loads(line).get("seq", 0))
+            except json.JSONDecodeError:
+                # A partial last line from a killed process. Skipping it costs a
+                # sequence number, which is worth less than refusing to start.
+                continue
+        return self._seq
+
     def _append(self, record: dict[str, Any]) -> None:
         """Write one record. Runs in an executor: this touches the disk."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +304,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     settings = config[DOMAIN]
     journal = _Journal(hass, settings[CONF_JOURNAL])
+    # Before anything is written, and off the event loop: reading the journal to
+    # continue its sequence is the one blocking thing this component does.
+    resumed = await hass.async_add_executor_job(journal.resume)
+    _LOGGER.info("acp35_bench continuing the journal from seq %d", resumed)
     recorder = _Recorder(hass, settings[CONF_RECEIVER], journal)
 
     @callback

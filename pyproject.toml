@@ -35,12 +35,17 @@ norecursedirs = ["tests/custom_components", "tests/integration"]
 markers = [
   "hardware: needs the KC868-AG, the ACP 35, or the original remote",
   "manual: needs a human to press a button or observe the unit",
+  "disruptive: transmits frames a listening appliance will act on",
 ]
-# Hardware tests never run by default. Every `manual` test also carries
-# `hardware`, so this single filter excludes both.
+# Hardware tests never run by default. Every `manual` and `disruptive` test also
+# carries `hardware`, so this single filter excludes all three.
 #   uv run pytest                              -> safe, no device touched
 #   uv run pytest -m hardware -s               -> everything, prompts included
 #   uv run pytest -m "hardware and not manual" -> device needed, no human needed
+# `disruptive` needs more than a marker, because selecting it is not the same as
+# consenting to it: those tests transmit frames a listening appliance acts on, and
+# they skip unless HW_RESTORE names the state to put the appliance back to. See
+# tests/hardware/conftest.py.
 addopts = "-m 'not hardware'"
 
 [tool.ruff]

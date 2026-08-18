@@ -21,6 +21,12 @@ The plan expected this to skip: a receiver centimetres from the emitting LED
 should saturate. It does not -- our transmissions come back cleanly -- but the
 skip is kept for anyone whose hardware differs, because a decode failure there is
 inconclusive rather than a bug.
+
+**Marked `disruptive`, and answered already.** Nothing here needs the appliance,
+but it sends 76 frames -- power off, dry, 17 C, 30 C, armed timers -- and an
+appliance in range acts on every one of them. It was written and run with the
+emitter in another room. Question 10 is settled, so re-running this is for when
+the emitter or the encoder changes, not part of an ordinary session.
 """
 
 import pytest
@@ -87,7 +93,8 @@ def loopback(send, journal) -> None:
         pytest.skip("receiver does not hear its own emitter")
 
 
-@pytest.mark.usefixtures("loopback")
+@pytest.mark.disruptive
+@pytest.mark.usefixtures("loopback", "appliance")
 class TestWhatWeSendIsWhatArrives:
     """The answer to question 10, one distinct corpus frame at a time."""
 
@@ -126,7 +133,8 @@ class TestWhatWeSendIsWhatArrives:
         assert heard.flags == original.flags
 
 
-@pytest.mark.usefixtures("loopback")
+@pytest.mark.disruptive
+@pytest.mark.usefixtures("loopback", "appliance")
 class TestWhatTheWaveformSays:
     """Properties of the capture itself, not of the bytes it carries."""
 
