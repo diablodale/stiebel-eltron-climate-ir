@@ -278,10 +278,8 @@ class Sent:
     afterwards can be told from what was already there."""
 
 
-@pytest.fixture
-def send(
-    ha: HomeAssistant, journal: Journal, emitter: str
-) -> Callable[..., Sent]:
+@pytest.fixture(scope="session")
+def send(ha: HomeAssistant, journal: Journal, emitter: str) -> Callable[..., Sent]:
     """Transmit through the bench, and say where in the journal it began.
 
     Takes durations rather than a command, because the point of several of these

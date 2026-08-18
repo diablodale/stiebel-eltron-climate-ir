@@ -790,7 +790,7 @@ identifies the winner instead of five separate confirmations.
 | `tests/hardware/test_header_mark.py` | `hardware, manual` | 7 | Parametrised over the candidate list; sends power-on with each and `confirm`s. Exactly one is expected to pass; the winner is written into the doc and `devices/acp35/protocol.py`. If all fail, a second parametrisation varies `CARRIER_HZ` too |
 | `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
 | `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
-| `tests/hardware/test_loopback.py` | `hardware` | 10 | Fully automatic. A session fixture transmits once and looks in the bench journal for any received frame; `pytest.skip("receiver does not hear its own emitter")` if none. Otherwise each state is sent, the journalled frame decoded to 9 bytes, and compared with both what we intended and what the remote produced for that state |
+| `tests/hardware/test_loopback.py` | `hardware` | 10 | **Written, and passing.** Fully automatic. A session fixture transmits once and skips everything if nothing comes back. Otherwise each of the 76 distinct corpus frames is re-encoded, sent, and the journalled capture decoded and compared with what the remote produced for that state |
 | `tests/hardware/test_receiver_sync.py` | `hardware, manual` | — | Not a question: end-to-end proof of Phase 5. Skips unless the device exposes a receiver entity, prompts for a press on the physical remote, asserts the climate entity followed. A companion case clears the receiver and asserts climate + timer still work |
 
 Questions 1–6 needed no module here: they were capture exercises, run through
@@ -1048,19 +1048,19 @@ so none of them gates a release.
 
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
-| 10 | Do our frames reach the air as the bytes we built, and match the remote's for the same state? | `test_loopback.py` | that nothing between `get_raw_timings()` and the LED reshapes the waveform |
+| ~~10~~ | ~~Do our frames reach the air as the bytes we built?~~ **Answered 2026-08-18: yes, for every state the remote was recorded producing.** All 76 distinct corpus frames were re-encoded, transmitted and heard back, each decoding to the bytes the remote itself produced. Nothing between `get_raw_timings()` and the LED reshapes the waveform, and a non-default carrier reaches it too, which question 7's fallback needs | — | — |
 | 11 | Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough? | `test_behaviour.py` | `_build_command` mirrors the remote's event bits — safe either way, so this only buys simplification |
 | 12 | Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed? | `test_behaviour.py` | whether `fan_modes` can gain `auto` |
 | 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | nothing any more. The remote forces low in dry and will not let the fan button move it, so `effective_fan()` mirrors that and we never send one. Answering this could relax the restriction, not fix a bug. |
 | ~~14~~ | ~~Does the unit act on the unit flag?~~ **Answered 2026-08-13: it acts on it.** Pressing C/F on the remote changes the appliance's own display panel to the chosen unit. That makes the scale the appliance shows the scale the user reads, so the climate entity now reports whichever one `b7` bit 7 selects rather than always Celsius. | — | — |
 | 15 | Does a power-off frame really leave the mode running in `b6`? | `test_behaviour.py` | `async_set_hvac_mode(OFF)` keeps the last mode |
 
-Why 10 leads: it is the only fully automatic test in the hardware set, and if the
-receiver can hear the emitter it turns a failure of 7 into a diagnosis rather than a
-guess — worth running alongside 7 even though it sits in this group. It is not itself
-blocking precisely because it may be unanswerable, for the saturation reason noted
-with the harness above; something that might never return an answer cannot gate a
-release. 12 is worth pairing with 3, which asks the same thing of the remote.
+Why 10 led: it is the only fully automatic test in the hardware set, and answering it
+first turns a failure of 7 into a diagnosis rather than a guess. It is now answered,
+so **a question 7 failure means the unit did not act on a frame that provably went out
+correctly** — which is the whole value of having run it first. The saturation worry
+that kept it out of the blocking group did not materialise. 12 is worth pairing with
+3, which asks the same thing of the remote.
 
 ### Procedures for questions 1–6
 
