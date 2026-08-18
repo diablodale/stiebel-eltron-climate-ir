@@ -318,3 +318,79 @@ class TestDecoding:
         timings = cool_high().get_raw_timings()
         timings[3] = -ONE_SPACE  # corrupt b0's top bit
         assert Acp35Command.from_raw_timings(timings) is None
+
+
+# The gap seen between two frames the receiver delivered in one buffer. Inside
+# ONE_SPACE's tolerance band of 1157..2699 us, which is the whole reason frames
+# cannot be split by looking for a long space.
+MERGED_GAP = -1415
+
+# ESPHome's receive idle timeout closes the buffer.
+IDLE_TAIL = -10000
+
+
+def merged(*commands: Acp35Command) -> list[int]:
+    """Build the buffer a receiver delivers for frames sent back to back."""
+    timings: list[int] = []
+    for command in commands:
+        timings.extend(command.get_raw_timings())
+        timings.append(MERGED_GAP)
+    timings[-1] = IDLE_TAIL
+    return timings
+
+
+class TestDecodingAWholeBuffer:
+    """all_from_raw_timings: a buffer is not a frame.
+
+    A receiver closes a buffer on an idle period, so two frames closer together
+    than that arrive together. Reading only the first loses the second silently.
+    """
+
+    def test_one_frame_still_reads_as_one(self):
+        original = cool_high(celsius=25)
+        frames = Acp35Command.all_from_raw_timings(original.get_raw_timings())
+        assert [f.to_bytes() for f in frames] == [original.to_bytes()]
+
+    def test_two_frames_in_one_buffer(self):
+        first = cool_high(celsius=18)
+        second = cool_high(celsius=27, fan=Acp35Fan.LOW)
+        frames = Acp35Command.all_from_raw_timings(merged(first, second))
+        assert [f.to_bytes() for f in frames] == [first.to_bytes(), second.to_bytes()]
+
+    def test_three_frames_in_one_buffer(self):
+        commands = [cool_high(celsius=c) for c in (17, 22, 30)]
+        frames = Acp35Command.all_from_raw_timings(merged(*commands))
+        assert [f.celsius for f in frames] == [17, 22, 30]
+
+    def test_the_buffer_may_start_at_the_header_space(self):
+        """A capture begins after the mark, which a merged one does too."""
+        first, second = cool_high(celsius=19), cool_high(celsius=28)
+        frames = Acp35Command.all_from_raw_timings(merged(first, second)[1:])
+        assert [f.celsius for f in frames] == [19, 28]
+
+    def test_a_second_frame_that_is_corrupt_is_dropped_not_the_first(self):
+        first, second = cool_high(celsius=21), cool_high(celsius=26)
+        timings = merged(first, second)
+        timings[-4] = -900  # nonsense space inside the second frame
+        frames = Acp35Command.all_from_raw_timings(timings)
+        assert [f.celsius for f in frames] == [21]
+
+    def test_trailing_noise_after_a_frame_is_ignored(self):
+        original = cool_high()
+        frames = Acp35Command.all_from_raw_timings(
+            [*original.get_raw_timings(), -2000, 300, -300, 250]
+        )
+        assert len(frames) == 1
+
+    @pytest.mark.parametrize(
+        ("description", "timings"),
+        [("empty", []), ("noise", [200, -300, 250, -9000]), ("all marks", [576] * 200)],
+    )
+    def test_nothing_decodable_yields_nothing(self, description, timings):
+        assert Acp35Command.all_from_raw_timings(timings) == [], description
+
+    def test_from_raw_timings_returns_the_first_of_several(self):
+        """The single-frame entry point keeps its old meaning."""
+        first, second = cool_high(celsius=20), cool_high(celsius=29)
+        decoded = Acp35Command.from_raw_timings(merged(first, second))
+        assert decoded.to_bytes() == first.to_bytes()

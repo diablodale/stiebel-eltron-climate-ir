@@ -98,6 +98,18 @@ class TestCorpus:
         assert capture.timings[0] < 0
 
     @pytest.mark.parametrize("capture", CAPTURES, ids=ids)
+    def test_capture_holds_exactly_one_frame(self, capture):
+        """Every other test here reads the first frame and ignores the rest.
+
+        A receiver closes a buffer on an idle period, so two frames sent close
+        together arrive as one capture. Promoting one into the document would
+        give it golden bytes describing only its first half, and nothing else in
+        this file would notice. The duration count above would catch it too, but
+        only while every frame is the same length as this protocol's.
+        """
+        assert len(Acp35Command.all_from_raw_timings(capture.timings)) == 1
+
+    @pytest.mark.parametrize("capture", CAPTURES, ids=ids)
     def test_decodes_with_valid_preamble_and_checksum(self, capture):
         command = Acp35Command.from_raw_timings(capture.timings)
         assert command is not None, "did not decode as an ACP 35 frame"

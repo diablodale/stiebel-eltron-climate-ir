@@ -358,35 +358,87 @@ class Acp35Command(Command):
 
     @classmethod
     def from_raw_timings(cls, timings: list[int]) -> Self | None:
-        """Decode raw timings, or return None if they are not an ACP 35 frame.
+        """Decode the first frame in raw timings, or None if there is not one.
 
         Tolerates a missing leading mark. Home Assistant receives a buffer that
         starts at the space *before* the first mark, so a captured frame has one
         fewer element than one we transmit.
-        """
-        data = list(timings)
 
+        Anything after the first frame is ignored. Use `all_from_raw_timings`
+        where a second frame would matter, which is any buffer a receiver
+        delivered.
+        """
+        command, _ = cls._decode_leading_frame(list(timings))
+        return command
+
+    @classmethod
+    def all_from_raw_timings(cls, timings: list[int]) -> list[Self]:
+        """Decode every frame in one receive buffer, in the order they arrived.
+
+        A buffer is not a frame. A receiver closes one on an idle period -- 10 ms
+        for ESPHome's default -- so two frames closer together than that arrive
+        together, and one 296-duration capture is two frames rather than a
+        corrupt one. That is not hypothetical: two frames sent 150 ms apart have
+        been observed reaching the air 1415 us apart, the transmit path not
+        having preserved the spacing.
+
+        Reading only the first frame loses the second silently, and the case that
+        matters is a buffer holding our own echo followed by a genuine remote
+        press: the echo decodes, is recognised as ours, the buffer is dropped,
+        and the button press is never applied.
+
+        Splitting has to be structural rather than by looking for a gap. The
+        inter-frame space observed was 1415 us, and `ONE_SPACE` with `TOLERANCE`
+        spans 1157..2699 us, so a gap between frames is indistinguishable from a
+        one bit by duration alone. Frames are therefore consumed a known number
+        of durations at a time.
+        """
+        frames: list[Self] = []
+        rest = list(timings)
+        while True:
+            command, consumed = cls._decode_leading_frame(rest)
+            if command is None:
+                return frames
+            frames.append(command)
+            rest = rest[consumed:]
+
+    @classmethod
+    def _decode_leading_frame(cls, data: list[int]) -> tuple[Self | None, int]:
+        """Decode a frame at the front of ``data``, and say how much it used."""
+        offset = 0
         # A leading space is the pre-frame gap, or the header space of a frame
         # whose header mark was never recorded.
         if data and data[0] < 0:
-            data = data[1:]
+            offset = 1
         # A leading mark far longer than a bit mark is a header; drop its pair.
-        if len(data) >= 2 and data[0] > BIT_MARK * 2 and data[1] < 0:
-            data = data[2:]
+        if (
+            len(data) >= offset + 2
+            and data[offset] > BIT_MARK * 2
+            and data[offset + 1] < 0
+        ):
+            offset += 2
 
-        if len(data) < BIT_COUNT * 2:
-            return None
+        if len(data) - offset < BIT_COUNT * 2:
+            return None, 0
 
         value = 0
         for i in range(BIT_COUNT):
-            bit = cls._decode_bit(data[2 * i], -data[2 * i + 1])
+            bit = cls._decode_bit(data[offset + 2 * i], -data[offset + 2 * i + 1])
             if bit is None:
-                return None
+                return None, 0
             value = (value << 1) | bit
 
         state = value.to_bytes(BYTE_COUNT, "big")
         if state[0] != PREAMBLE or sum(state[:-1]) & 0xFF != state[-1]:
-            return None
+            return None, 0
+
+        consumed = offset + BIT_COUNT * 2
+        # The trailer mark closes the frame and belongs to it. The space after it
+        # does not get consumed here: the next frame's decode strips it as its
+        # own leading space, which is the same thing a receiver's buffer does at
+        # the very start.
+        if len(data) > consumed and data[consumed] > 0:
+            consumed += 1
 
         return cls(
             power=bool(state[1] & _POWER_MASK),
@@ -397,7 +449,7 @@ class Acp35Command(Command):
             timer_hours=state[2],
             timer_off_delay=bool(state[1] & _TIMER_OFF_DELAY_MASK),
             flags=Acp35Flag(state[7]),
-        )
+        ), consumed
 
     @staticmethod
     def _is_close(actual: int, expected: int) -> bool:

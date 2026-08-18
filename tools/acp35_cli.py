@@ -92,20 +92,27 @@ def describe(command: Acp35Command) -> str:
 
 
 def decode_stream(text: str) -> int:
-    """Decode every frame found in ``text``. Returns a process exit code."""
-    frames = read_timings(text)
-    if not frames:
+    """Decode every frame found in ``text``. Returns a process exit code.
+
+    A buffer is not a frame. What a receiver hands over is whatever arrived
+    before it went idle, so one log line can hold two frames sent close
+    together; each is decoded and printed.
+    """
+    buffers = read_timings(text)
+    if not buffers:
         print("no Pronto code or raw timings found in input", file=sys.stderr)
         return 2
 
     failures = 0
-    for index, timings in enumerate(frames, start=1):
-        print(f"frame {index} ({len(timings)} timings)")
-        command = Acp35Command.from_raw_timings(timings)
-        if command is None:
+    for index, timings in enumerate(buffers, start=1):
+        print(f"buffer {index} ({len(timings)} timings)")
+        commands = Acp35Command.all_from_raw_timings(timings)
+        if not commands:
             print("  not an ACP 35 frame: bad framing, preamble or checksum")
             failures += 1
-        else:
+        for number, command in enumerate(commands, start=1):
+            if len(commands) > 1:
+                print(f"  frame {number} of {len(commands)}")
             print(describe(command))
         print()
     return 1 if failures else 0

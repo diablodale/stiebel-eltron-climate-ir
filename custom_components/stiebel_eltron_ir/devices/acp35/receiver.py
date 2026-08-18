@@ -15,28 +15,41 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def handle_signal(data: StiebelEltronIrData, signal: InfraredReceivedSignal) -> None:
-    """Apply a received frame, ignoring anything that is not ours.
+    """Apply every frame in a received buffer, ignoring anything not ours.
 
     The receiver picks up every remote in the room, so most signals are not
-    ACP 35 frames. ``from_raw_timings`` returns None for those -- including
-    anything that fails the preamble or checksum -- and they are dropped without
-    comment.
+    ACP 35 frames. ``all_from_raw_timings`` returns nothing for those --
+    including anything that fails the preamble or checksum -- and they are
+    dropped without comment.
 
-    Our own transmissions are dropped too. The emitter and receiver are on the
-    same board, so everything we send comes straight back; applying it would
-    replace the shadow state with the contents of the frame, which is not the
-    same thing. Switching to dry, for instance, transmits the pinned 22 °C and
-    low fan, and echoing that back overwrote the setpoint and fan speed the user
-    had chosen in cool.
+    One buffer can hold more than one frame, because a receiver closes a buffer
+    on an idle period and two frames closer together than that arrive together.
+    Each is applied in turn, in the order it arrived, so the last one wins where
+    they disagree -- the same result as receiving them separately.
+
+    Our own transmissions are dropped, frame by frame rather than buffer by
+    buffer. The emitter and receiver are on the same board, so everything we send
+    comes straight back; applying it would replace the shadow state with the
+    contents of the frame, which is not the same thing. Switching to dry, for
+    instance, transmits the pinned 22 °C and low fan, and echoing that back
+    overwrote the setpoint and fan speed the user had chosen in cool. Dropping
+    the whole buffer on one echo would be the same bug in reverse: a buffer
+    holding our echo *and* a genuine press would lose the press.
     """
-    command = Acp35Command.from_raw_timings(signal.timings)
-    if command is None:
-        return
+    applied = False
+    for command in Acp35Command.all_from_raw_timings(signal.timings):
+        if data.async_is_own_echo(command.to_bytes()):
+            _LOGGER.debug("Ignored our own transmission: %r", command)
+            continue
+        _apply(data, command)
+        applied = True
 
-    if data.async_is_own_echo(command.to_bytes()):
-        _LOGGER.debug("Ignored our own transmission: %r", command)
-        return
+    if applied:
+        data.async_notify()
 
+
+def _apply(data: StiebelEltronIrData, command: Acp35Command) -> None:
+    """Copy one heard frame over the shadow state."""
     state = data.state
     state.power = command.power
     # Mode first: the speed is stored against the mode the frame carries, so a
@@ -57,4 +70,3 @@ def handle_signal(data: StiebelEltronIrData, signal: InfraredReceivedSignal) -> 
     state.display_celsius = command.is_celsius
 
     _LOGGER.debug("Followed the remote: %r", command)
-    data.async_notify()

@@ -68,16 +68,29 @@ async def entry_with_receiver(
     return config_entry
 
 
-def deliver(hass: HomeAssistant, entry: MockConfigEntry, command: Acp35Command) -> None:
-    """Hand a frame to the sync as though the receiver had heard it.
+def deliver(
+    hass: HomeAssistant, entry: MockConfigEntry, *commands: Acp35Command
+) -> None:
+    """Hand one buffer to the sync as though the receiver had heard it.
 
     Calls the handler directly rather than standing up a receiver platform: the
     subscription itself is covered separately, and this keeps the decode path
     under test rather than Home Assistant's plumbing.
+
+    Several commands means several frames in *one* buffer, which is what a
+    receiver delivers when they arrive closer together than its idle timeout --
+    10 ms for ESPHome. The 1415 us gap is the one measured between two frames
+    the device actually emitted back to back.
     """
+    timings: list[int] = []
+    for command in commands:
+        timings.extend(command.get_raw_timings())
+        timings.append(-1415)
+    timings[-1] = -10000  # the idle period that closed the buffer
+
     handle_signal(
         entry.runtime_data,
-        InfraredReceivedSignal(timings=command.get_raw_timings(), modulation=38000),
+        InfraredReceivedSignal(timings=timings, modulation=38000),
     )
 
 
@@ -104,6 +117,21 @@ class TestFollowingTheRemote:
         deliver(hass, entry_with_receiver, remote_frame(power=False))
         await hass.async_block_till_done()
         assert hass.states.get(CLIMATE_ID).state == HVACMode.OFF
+
+    async def test_two_presses_in_one_buffer_are_both_applied(
+        self, hass: HomeAssistant, entry_with_receiver
+    ) -> None:
+        """A buffer is not a frame, and the later press wins where they differ."""
+        deliver(
+            hass,
+            entry_with_receiver,
+            remote_frame(celsius=19, fan=Acp35Fan.LOW),
+            remote_frame(celsius=28, fan=Acp35Fan.MEDIUM),
+        )
+        await hass.async_block_till_done()
+        state = hass.states.get(CLIMATE_ID)
+        assert state.attributes[ATTR_TEMPERATURE] == 28
+        assert state.attributes[ATTR_FAN_MODE] == "medium"
 
     async def test_mode_and_fan_are_followed(
         self, hass: HomeAssistant, entry_with_receiver
@@ -515,6 +543,41 @@ class TestOwnEchoIsIgnored:
 
         deliver(hass, entry_with_receiver, sent)
         assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 20
+
+    async def test_a_press_merged_with_our_echo_is_not_lost(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """The defect: one buffer, our echo first, a real press behind it.
+
+        A receiver closes a buffer on an idle period, so a press landing within
+        about 10 ms of our own transmission arrives in the same buffer. Decoding
+        only the first frame found our echo, recognised it as ours, and dropped
+        the buffer -- taking the button press with it, silently.
+        """
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        echo = last_command(send_command)
+
+        deliver(hass, entry_with_receiver, echo, remote_frame(celsius=28))
+        await hass.async_block_till_done()
+
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 28
+
+    async def test_our_echo_behind_a_press_is_still_ignored(
+        self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock
+    ) -> None:
+        """Order matters: the last frame in the buffer wins, echoes excepted."""
+        await self._set(hass, SERVICE_SET_HVAC_MODE, hvac_mode=HVACMode.COOL)
+        await self._set(hass, SERVICE_SET_TEMPERATURE, temperature=20)
+        await self._set(hass, SERVICE_SET_FAN_MODE, fan_mode="medium")
+        await self._set(hass, SERVICE_SET_HVAC_MODE, hvac_mode=HVACMode.DRY)
+        echo = last_command(send_command)
+
+        # The press arrives first, our dry echo second. Applying the echo would
+        # pin the setpoint to 22 C and the fan to low, which is the original bug.
+        deliver(hass, entry_with_receiver, remote_frame(celsius=25), echo)
+        await hass.async_block_till_done()
+
+        assert hass.states.get(CLIMATE_ID).attributes[ATTR_TEMPERATURE] == 25
 
     async def test_an_earlier_echo_is_still_recognised(
         self, hass: HomeAssistant, entry_with_receiver, send_command: AsyncMock

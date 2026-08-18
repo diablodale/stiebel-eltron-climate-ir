@@ -117,22 +117,38 @@ def label_of(records: list[dict[str, Any]], upto: int) -> str:
     return "unlabelled"
 
 
-def describe(record: dict[str, Any]) -> str:
-    """Return the frame's duration count, decoded bytes and field values."""
-    timings = record["timings"]
-    command = Acp35Command.from_raw_timings(timings)
-    if command is None:
-        return f"{len(timings):>3} timings  NOT A VALID ACP 35 FRAME"
-
+def describe_frame(command: Acp35Command) -> str:
+    """Return one frame's decoded bytes and field values."""
     state = command.to_bytes()
     checksum = "ok" if state[8] == sum(state[:8]) & 0xFF else "BAD"
     return (
-        f"{len(timings):>3} timings  {state.hex(' ')}  checksum {checksum}\n"
+        f"{state.hex(' ')}  checksum {checksum}\n"
         f"             power={'on' if command.power else 'off'} "
         f"mode={command.mode.name.lower()} fan={command.fan.name.lower()} "
         f"{command.celsius}C/{command.fahrenheit}F "
         f"timer={command.timer_hours}h flags={command.flags!r}"
     )
+
+
+def describe(record: dict[str, Any]) -> str:
+    """Return the record's duration count and every frame it holds.
+
+    Every frame, not the first: a receiver closes a buffer on an idle period, so
+    frames closer together than that arrive in one record. A 296-duration record
+    is two frames, and reading only the first would hide the second — which is
+    exactly what a session investigating frame timing needs to see.
+    """
+    timings = record["timings"]
+    commands = Acp35Command.all_from_raw_timings(timings)
+    if not commands:
+        return f"{len(timings):>3} timings  NOT A VALID ACP 35 FRAME"
+
+    if len(commands) == 1:
+        return f"{len(timings):>3} timings  {describe_frame(commands[0])}"
+
+    lines = [f"{len(timings):>3} timings  {len(commands)} FRAMES IN ONE BUFFER"]
+    lines.extend(f"             {describe_frame(command)}" for command in commands)
+    return "\n".join(lines)
 
 
 def _request(path: str, data: dict[str, Any] | None = None) -> Any:
