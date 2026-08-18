@@ -39,6 +39,14 @@ acp35_bench:
 ``emitter`` is optional: a session that only listens does not need one, and a
 service call can always name a different one.
 
+The journal is rotated at startup, so **one file is one Home Assistant run** and
+the previous few sit beside it as ``journal.1.jsonl`` onwards. That is not
+housekeeping: the stamps that order the records restart when the process or the
+machine does, so records from two runs in one file cannot be reliably ordered
+against each other. Starting a session on a clean journal means restarting Home
+Assistant; nothing else can, because ``receiver_ready`` is written here on
+subscribing and moving the file from outside would leave the new one without it.
+
 This never ships. It is loaded only by the development instance.
 """
 
@@ -90,6 +98,10 @@ ATTR_COUNT = "count"
 ATTR_GAP = "gap"
 
 DEFAULT_JOURNAL = "/workspaces/acp35/tests/hardware/journal.jsonl"
+
+# How many previous journals to keep beside the current one. Must match
+# KEEP_ROTATIONS in tools/hw.py, which rotates the same files on demand.
+KEEP_ROTATIONS = 5
 
 # The carrier every ACP 35 capture was recorded at. Overridable per call, since
 # question 7's fallback varies it.
@@ -182,26 +194,46 @@ class _Journal:
         self._path = Path(path)
         self._seq = 0
 
-    def resume(self) -> int:
-        """Continue the sequence from what the journal already holds.
+    def rotate(self) -> Path | None:
+        """Move any existing journal aside so this run starts an empty one.
 
-        Runs in an executor: this reads the whole file. Without it the count
-        restarts at 1 on every Home Assistant restart, and a reader sorting the
-        file by `seq` interleaves sessions -- which happened, and hid a session's
-        records among the previous night's.
+        Runs in an executor: this touches the disk. Returns where the previous
+        run's records now live, or None if there were none.
+
+        **One file is one run.** `seq` restarts with this process and `raw`
+        restarts with the machine, so both are only comparable within a run.
+        Appending run after run to one file is what made a night's records
+        scatter among the previous night's, and what let a `receiver_lost` from
+        an earlier run compare as newer than this run's `receiver_ready` and skip
+        a hardware session. Bridging that by continuing the sequence across
+        restarts was tried and is what this replaces: it read the whole file to
+        recover a number, and it failed silently when the running process
+        predated the code that did the reading. Starting a new file needs nothing
+        to have gone right beforehand.
+
+        Rotating here rather than from a host-side command is deliberate.
+        `receiver_ready` is written when this component subscribes, so a mover
+        outside Home Assistant leaves the new journal without it and the hardware
+        fixtures skip on "the bench never subscribed to a receiver". Anything
+        that fixed that would have to restart Home Assistant, and restarting is
+        what already runs this.
         """
-        if not self._path.is_file():
-            return self._seq
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                self._seq = max(self._seq, json.loads(line).get("seq", 0))
-            except json.JSONDecodeError:
-                # A partial last line from a killed process. Skipping it costs a
-                # sequence number, which is worth less than refusing to start.
-                continue
-        return self._seq
+        if not self._path.is_file() or self._path.stat().st_size == 0:
+            return None
+        oldest = self._numbered(KEEP_ROTATIONS)
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(KEEP_ROTATIONS, 1, -1):
+            source = self._numbered(index - 1)
+            if source.exists():
+                source.rename(self._numbered(index))
+        destination = self._numbered(1)
+        self._path.rename(destination)
+        return destination
+
+    def _numbered(self, index: int) -> Path:
+        """Return the name a rotated journal takes: ``journal.1.jsonl``."""
+        return self._path.with_name(f"{self._path.stem}.{index}{self._path.suffix}")
 
     def _append(self, record: dict[str, Any]) -> None:
         """Write one record. Runs in an executor: this touches the disk."""
@@ -213,14 +245,19 @@ class _Journal:
     def async_write(self, kind: str, **fields: Any) -> None:
         """Queue a record, stamped three ways.
 
-        ``seq`` is the order records were created. It is assigned here, on the
-        event loop, so it is the only ordering that cannot be wrong: the writes
-        themselves go to an executor and could land out of order, and ``at`` is a
-        wall clock that steps backwards on this development host.
+        ``raw`` is `CLOCK_MONOTONIC_RAW` and is what readers order by. It is the
+        one clock here that runs at the right rate, so any duration measured
+        between records has to come from it -- see the known clock issue in
+        `docs/ha_ir_platform/plan.md` -- and it is the same counter the host
+        reads, so a record and a `time.clock_gettime` call are comparable without
+        translation. It restarts only when the machine does.
 
-        ``raw`` is `CLOCK_MONOTONIC_RAW`, the one clock here that runs at the
-        right rate. Any duration measured between records has to come from it.
-        See the known clock issue in `docs/ha_ir_platform/plan.md`.
+        ``seq`` is the order records were created, counted by this process. Both
+        it and ``raw`` are stamped here, on the event loop, so both describe
+        creation rather than the write, which goes to an executor and could land
+        out of order. ``seq`` is the tiebreak, and the way a missing record shows
+        up as a gap; it is not the primary ordering, because it restarts at 1
+        with this process while ``raw`` does not.
 
         ``at`` stays because a human reading the file wants a time of day, not a
         number of seconds since an arbitrary boot.
@@ -304,10 +341,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     settings = config[DOMAIN]
     journal = _Journal(hass, settings[CONF_JOURNAL])
-    # Before anything is written, and off the event loop: reading the journal to
-    # continue its sequence is the one blocking thing this component does.
-    resumed = await hass.async_add_executor_job(journal.resume)
-    _LOGGER.info("acp35_bench continuing the journal from seq %d", resumed)
+    # Before anything is written, and off the event loop: moving the previous
+    # run's journal aside is the one blocking thing this component does.
+    rotated = await hass.async_add_executor_job(journal.rotate)
+    if rotated is None:
+        _LOGGER.info("acp35_bench starting a new journal")
+    else:
+        _LOGGER.info("acp35_bench moved the previous journal to %s", rotated)
     recorder = _Recorder(hass, settings[CONF_RECEIVER], journal)
 
     @callback

@@ -242,9 +242,15 @@ class Record:
 class Journal:
     """What `acp35_bench` has written, and a way to wait for more.
 
-    Ordered by `seq`, which the bench assigns as each record is created. Neither
-    alternative is safe: the writes go through an executor and can reach the file
-    out of order, and the wall clock steps backwards on this host.
+    Ordered by `raw`, the `CLOCK_MONOTONIC_RAW` reading the bench stamps as each
+    record is created. Neither alternative is safe: the writes go through an
+    executor and can reach the file out of order, and the wall clock steps
+    backwards on this host.
+
+    The bench rotates the journal at startup, so a file holds one Home Assistant
+    run. That is what makes `seq` usable here at all -- it restarts with the
+    process that assigns it, so comparing sequence numbers only means something
+    within a run.
     """
 
     def __init__(self, path: Path) -> None:
@@ -307,11 +313,19 @@ def journal(ha: HomeAssistant) -> Journal:
             f"{book.path} is empty. Is acp35_bench in configuration.yaml, and "
             "has Home Assistant been restarted since?"
         )
-    ready = [record for record in records if record.kind == "receiver_ready"]
-    lost = [record for record in records if record.kind == "receiver_lost"]
-    if not ready:
+    # By position in the ordered list, not by `seq`. Rotation means a file is one
+    # run and the two would now agree, but position cannot be wrong even if a
+    # file somehow holds two: `order_records` has already put them in order, and
+    # a stale `receiver_lost` reading as newer than the current run's
+    # `receiver_ready` is exactly how this skipped a session that was ready to go.
+    subscription = [
+        record
+        for record in records
+        if record.kind in ("receiver_ready", "receiver_lost")
+    ]
+    if not any(record.kind == "receiver_ready" for record in subscription):
         pytest.skip("the bench never subscribed to a receiver")
-    if lost and lost[-1].seq > ready[-1].seq:
+    if subscription[-1].kind == "receiver_lost":
         pytest.skip("the receiver is unavailable; is the device on the network?")
     return book
 

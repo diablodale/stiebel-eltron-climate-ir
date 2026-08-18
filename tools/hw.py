@@ -15,6 +15,11 @@ protocol document, which ``tests/conftest.py`` parses as the regression corpus.
 journal file and run with the container stopped. Both need HA_URL and HA_TOKEN,
 from the environment or from a ``.env`` beside ``pyproject.toml``; copy
 ``.env.example`` to create one.
+
+One journal file holds one Home Assistant run, which the bench arranges by
+rotating at startup. Starting a session on a clean journal therefore means
+restarting Home Assistant. Reading further back means naming an archived file
+with ``--journal tests/hardware/journal.1.jsonl``.
 """
 
 import argparse
@@ -69,33 +74,42 @@ def load_dotenv() -> None:
 def order_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the records in the order they were created.
 
-    ``seq`` is assigned by the bench on the event loop as each record is created,
-    and is the only ordering that can be trusted within a run: the writes go
+    Ordered by ``raw``, `CLOCK_MONOTONIC_RAW`, which is stamped on the event loop
+    in the same statement as ``seq`` and therefore carries the same authority
+    about creation order. Neither of the alternatives is safe: the writes go
     through an executor and can reach the file out of order, and ``at`` is a wall
-    clock that steps backwards on this development host.
+    clock that steps backwards on this development host -- four times in the
+    journal that prompted this.
 
-    Across runs it needs help. The bench now continues the sequence from what the
-    journal holds, but older files restart at 1 on every Home Assistant restart,
-    so sorting the whole file by `seq` interleaves sessions -- a night's records
-    ended up scattered among the previous night's. A sequence that goes backwards
-    is therefore read as a new run: sort within each run, and keep the runs in the
-    order the file has them.
+    ``raw`` is preferred over ``seq`` because it survives more. ``seq`` restarts
+    with the process that assigns it, so it is only comparable within one Home
+    Assistant run; ``raw`` is a kernel counter that keeps running across a
+    restart, is unaffected by the tick-rate error and NTP slewing that make the
+    wall clock unusable, and is the same counter the host reads, so a journal
+    record and a `time.clock_gettime` call on this machine are directly
+    comparable.
+
+    What ``raw`` does not survive is a reboot, and it says so: it goes backwards.
+    That is read as a boundary, records keep their file order across one, and
+    ``seq`` breaks ties within a segment. Since the bench rotates the journal at
+    startup a file normally holds one run and none of this has anything to do;
+    it stays for the archived files, which do not.
     """
-    runs: list[list[dict[str, Any]]] = []
+
+    def key(record: dict[str, Any]) -> tuple[float, int]:
+        return (record.get("raw", float("-inf")), record.get("seq", -1))
+
+    segments: list[list[dict[str, Any]]] = []
     previous = None
     for record in records:
-        seq = record.get("seq", -1)
-        if previous is None or seq < previous:
-            runs.append([])
-        runs[-1].append(record)
-        previous = seq
-    return [
-        record
-        for run in runs
-        # Records written before `seq` existed keep their file order, which for
-        # a single run is the order they were created in anyway.
-        for record in sorted(run, key=lambda r: r.get("seq", -1))
-    ]
+        raw = record.get("raw", float("-inf"))
+        if previous is None or raw < previous:
+            segments.append([])
+        segments[-1].append(record)
+        previous = raw
+    # Records written before either stamp existed all compare equal, and sort()
+    # is stable, so they keep the file order they were written in.
+    return [record for segment in segments for record in sorted(segment, key=key)]
 
 
 def read_journal(path: Path) -> list[dict[str, Any]]:

@@ -135,6 +135,27 @@ mount, so the file is readable from Windows and WSL2 while Home Assistant is sti
 writing it. It is gitignored: frames worth keeping are promoted into the protocol
 document, and the rest is session noise.
 
+**One file is one Home Assistant run.** The bench rotates the journal at startup,
+leaving the previous five beside it as `journal.1.jsonl` onwards. Starting a
+session on a clean journal therefore means restarting Home Assistant — which is
+worth doing before a hardware session anyway, on an instance that has been up for
+hours with a few thousand records of ambient infrared in front of it.
+
+A host-side `clear` command was tried and removed. `receiver_ready` is written
+when the bench subscribes, so moving the file leaves the new one without it and
+the hardware fixtures skip on "the bench never subscribed to a receiver". Making
+it usable meant restarting Home Assistant afterwards, and restarting already
+rotates.
+
+That is not housekeeping. The two stamps that order the records both restart:
+`seq` with the Home Assistant process that assigns it, `raw` with the machine. So
+records from two runs in one file cannot be reliably ordered against each other,
+and a file that accumulates runs eventually misleads — a stale `receiver_lost`
+from an earlier run once compared as newer than the current run's
+`receiver_ready`, and skipped a whole hardware session with the device sitting
+there working. Rotating removes that by construction. Reading back further than
+the current run means naming an archived file with `--journal`.
+
 `tools/hw.py` then drives the session from the host. Copy `.env.example` to `.env`,
 which is gitignored, and fill in `HA_TOKEN` with a long-lived access token from the
 devcontainer's Home Assistant rather than the production one:
