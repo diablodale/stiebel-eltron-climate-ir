@@ -1068,11 +1068,30 @@ Not answerable from captures: the 10.1 ms tail on every one is ESPHome's receive
 idle timeout, not something the remote emitted, so the true inter-frame gap has
 never been observed.
 
-**Time both procedures on `CLOCK_MONOTONIC_RAW`.** Each measures a separation the
-host schedules, and on this machine `time.monotonic()` runs 2.4% fast while the
-wall clock steps backwards several times a minute. Only the raw clock is sound.
-See *Known issue: the development host's clock is unusable for measurement*, and
-say in the protocol document which clock produced the numbers.
+**The separation must be measured, not requested. Measured 2026-08-18:** four
+frames sent through `acp35_bench.send` with a requested 150 ms gap produced three
+receive buffers, one of which held two frames **1415 µs apart**. Something
+between Home Assistant and the emitting LED — the ESPHome API, the device's
+transmit queue — does not preserve the spacing between service calls. A
+procedure that assumes the requested gap reached the air would answer a question
+nobody asked.
+
+The loopback measures it exactly, and needs no clock at all: two frames close
+enough together arrive in **one** buffer, and the gap between them is a single
+duration timed by the ESP32. Read it as the last space before the second frame's
+header mark. Where the frames land in separate buffers the gap was at least the
+receiver's 10 ms idle timeout, and each transmission's `CLOCK_MONOTONIC_RAW`
+reading in the journal bounds it from above.
+
+This supersedes timing the procedure from the host. `time.monotonic()` runs 2.4%
+fast here and the wall clock steps backwards — see *Known issue: the development
+host's clock is unusable for measurement* — but none of that matters when the
+number comes off the device. Say in the protocol document which method produced
+each figure.
+
+One consequence for the procedure below: **a buffer is not a frame.** A 296-
+duration capture is two frames, not a corrupt one, and counting buffers would
+under-count what the unit received.
 
 Two things to try, once 8 has established that the unit reliably acts on a command
 sent in isolation — without that baseline a missed frame here is unattributable:

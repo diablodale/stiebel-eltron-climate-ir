@@ -109,9 +109,10 @@ Docker Desktop's NAT, though outbound API connections to the LAN are fine.
 Settings → Devices → Add integration → ESPHome → enter the IP and the encryption
 key. The device's two `ir_rf_proxy` instances arrive as two HA entities.
 
-`acp35_bench` records what the receiver delivers, and needs that receiver's entity
-id. Read it from Home Assistant rather than deriving it from the ESPHome config,
-then write the configuration entry with the same script as step 4:
+`acp35_bench` records what the receiver delivers and transmits through the
+emitter, so it needs both entity ids. Read them from Home Assistant rather than
+deriving them from the ESPHome config, then write the configuration entry with
+the same script as step 4:
 
 ```bash
 # Two emitters and two receivers exist once fake_ir is loaded; `real` marks the
@@ -119,11 +120,15 @@ then write the configuration entry with the same script as step 4:
 uv run python tools/hw.py entities
 
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
-  /workspaces/acp35/tools/link_devcontainer.sh --receiver infrared.<receiver id>
+  /workspaces/acp35/tools/link_devcontainer.sh \
+    --receiver infrared.<receiver id> --emitter infrared.<emitter id>
 ```
 
 That appends `acp35_bench:` to `configuration.yaml` if it is not already present,
-naming the receiver and the journal path. Restart Home Assistant afterwards.
+naming the receiver, the emitter and the journal path. Restart Home Assistant
+afterwards. The emitter is optional — a session that only listens to the remote
+does not need one — but without it `acp35_bench.send` refuses unless every call
+names an emitter itself, and the transmit tests need it.
 
 The journal path is a *container* path that lands in this repo through the bind
 mount, so the file is readable from Windows and WSL2 while Home Assistant is still
@@ -143,6 +148,41 @@ uv run python tools/hw.py pronto --since-mark          # blocks for the document
 
 Only `mark` needs Home Assistant running; the others read the journal file and work
 with the container stopped.
+
+### Transmitting
+
+`acp35_bench.send` puts a frame on the air. It takes raw durations and never
+encodes, exactly as it records raw durations and never decodes — whoever calls it
+builds the frame with the shipping codec, or by hand when the point is to send
+something the codec cannot produce. That is what question 7 needs: `HEADER_MARK`
+is a module constant, so trying another value means assembling the durations
+outside the encoder.
+
+| field | |
+| ----- | - |
+| `timings` | required; microseconds, marks positive and spaces negative |
+| `emitter` | defaults to the configured one |
+| `modulation` | carrier in Hz, default 38000 |
+| `repeat_count` | passed to the emitter, default 0 |
+| `count`, `gap` | send the frame `count` times, `gap` seconds apart |
+
+`count` and `gap` exist because question 9 measures the smallest separation the
+appliance still acts on, and two REST calls arrive tens of milliseconds apart —
+the same order as the gaps being measured.
+
+**`gap` spaces the service calls, not the emissions.** Four frames requested
+150 ms apart produced three receive buffers, one holding two frames 1415 µs
+apart: something between Home Assistant and the LED does not preserve the
+spacing. So the separation is always measured, never assumed. The loopback is
+what measures it — two frames close enough together arrive in one buffer with the
+gap between them as a single duration, timed by the ESP32 and free of every clock
+problem on this host. Each transmission also carries a `CLOCK_MONOTONIC_RAW`
+reading, which bounds the separation when the frames land in separate buffers.
+See the known clock issue in [plan.md](plan.md).
+
+Journal records now carry `seq`, assigned as each record is created, and
+`tools/hw.py` orders by it. That is the only ordering that can be trusted here:
+the writes go through an executor, and the wall clock steps backwards.
 
 ## `fake_ir`
 

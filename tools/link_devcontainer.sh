@@ -9,18 +9,23 @@
 #       /workspaces/acp35/tools/link_devcontainer.sh
 #
 # Re-running is safe. Pass --receiver to also add the acp35_bench configuration
-# entry; obtain the entity id with `tools/hw.py entities` rather than typing it.
+# entry, and --emitter so the bench can transmit without every service call
+# naming one; obtain both entity ids with `tools/hw.py entities` rather than
+# typing them.
 set -euo pipefail
 
 ACP35_DIR="${ACP35_DIR:-/workspaces/acp35}"
 HA_CORE_DIR="${HA_CORE_DIR:-/workspaces/ha-core}"
 RECEIVER=""
+EMITTER=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --receiver) RECEIVER="${2:-}"; shift 2 ;;
         --receiver=*) RECEIVER="${1#*=}"; shift ;;
-        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --emitter) EMITTER="${2:-}"; shift 2 ;;
+        --emitter=*) EMITTER="${1#*=}"; shift ;;
+        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -75,20 +80,35 @@ CONFIG="$HA_CORE_DIR/config/configuration.yaml"
 
 if grep -q "^acp35_bench:" "$CONFIG" 2>/dev/null; then
     echo "acp35_bench is already configured in $CONFIG"
+    if [ -n "$EMITTER" ] && ! grep -q "^  emitter:" "$CONFIG"; then
+        echo "  It names no emitter. Add this line under acp35_bench: by hand,"
+        echo "  or the bench can only receive:"
+        echo "    emitter: $EMITTER"
+    fi
 elif [ -n "$RECEIVER" ]; then
     cat >> "$CONFIG" <<YAML
 
-# Dev-only capture recorder. Appends every infrared signal the receiver entity
-# delivers to a JSONL journal, which tools/hw.py decodes.
+# Dev-only capture bench. Appends every infrared signal the receiver entity
+# delivers to a JSONL journal, which tools/hw.py decodes, and transmits raw
+# timings through the emitter on acp35_bench.send.
 acp35_bench:
   receiver: $RECEIVER
-  journal: $ACP35_DIR/tests/hardware/journal.jsonl
 YAML
-    echo "Added acp35_bench to $CONFIG, receiver $RECEIVER"
+    if [ -n "$EMITTER" ]; then
+        echo "  emitter: $EMITTER" >> "$CONFIG"
+    fi
+    echo "  journal: $ACP35_DIR/tests/hardware/journal.jsonl" >> "$CONFIG"
+    echo "Added acp35_bench to $CONFIG, receiver $RECEIVER${EMITTER:+, emitter $EMITTER}"
+    if [ -z "$EMITTER" ]; then
+        echo "No emitter named: the bench can record but not transmit."
+    fi
     echo "Restart Home Assistant for it to take effect."
 else
     echo
     echo "acp35_bench is not configured. Add it with:"
-    echo "  $0 --receiver \$(cd $ACP35_DIR && python tools/hw.py entities | \\"
-    echo "      awk '\$2 == \"receiver\" && \$NF == \"real\" {print \$1}')"
+    echo "  $0 \\"
+    echo "    --receiver \$(cd $ACP35_DIR && python tools/hw.py entities | \\"
+    echo "        awk '\$2 == \"receiver\" && \$NF == \"real\" {print \$1}') \\"
+    echo "    --emitter \$(cd $ACP35_DIR && python tools/hw.py entities | \\"
+    echo "        awk '\$2 == \"emitter\" && \$NF == \"real\" {print \$1}')"
 fi

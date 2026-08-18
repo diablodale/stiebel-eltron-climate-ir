@@ -67,13 +67,22 @@ def load_dotenv() -> None:
 
 
 def read_journal(path: Path) -> list[dict[str, Any]]:
-    """Return every record in the journal, oldest first."""
+    """Return every record in the journal, oldest first.
+
+    Sorted by ``seq``, which the bench assigns on the event loop as each record
+    is created. Neither of the alternatives is safe: the writes go through an
+    executor and can reach the file out of order, and ``at`` is a wall clock that
+    steps backwards on this development host, which has produced records whose
+    timestamps run a second backwards. Records written before ``seq`` existed
+    keep their file order and sort first, which is where they belong.
+    """
     if not path.is_file():
         return []
     records = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
             records.append(json.loads(line))
+    records.sort(key=lambda record: record.get("seq", -1))
     return records
 
 
@@ -275,14 +284,26 @@ def cmd_journal(args: argparse.Namespace) -> int:
     if args.tail:
         selected = selected[-args.tail :]
 
+    previous_raw: float | None = None
     for record in selected:
         stamp = record["at"].split("T")[1]
         if record["kind"] == "signal":
             print(f"{stamp}  #{record['index']}  {describe(record)}")
+        elif record["kind"] == "transmit":
+            # The gap is measured, not the one that was asked for: it comes from
+            # CLOCK_MONOTONIC_RAW, the only clock on this host that runs at the
+            # right rate. See the known clock issue in plan.md.
+            gap = ""
+            if previous_raw is not None and "raw" in record:
+                gap = f"  +{(record['raw'] - previous_raw) * 1000:.1f}ms"
+            print(
+                f"{stamp}  ->{record['number']}/{record['of']}{gap}  {describe(record)}"
+            )
         elif record["kind"] == "mark":
             print(f"{stamp}  -- {record['label']} --")
         else:
             print(f"{stamp}  ({record['kind']})")
+        previous_raw = record.get("raw", previous_raw)
 
     # Say what was dropped. A silent filter reads as "the remote emitted
     # nothing" when it in fact means "everything heard was too short".
@@ -333,9 +354,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     ready = [r for r in records if r["kind"] in ("receiver_ready", "receiver_lost")]
     frames = [r for r in records if is_frame(r)]
     noise = [r for r in records if is_noise(r)]
+    sent = [r for r in records if r["kind"] == "transmit"]
     print(f"journal      {args.journal}")
     print(f"records      {len(records)}")
-    print(f"frames       {len(frames)}")
+    print(f"frames       {len(frames)} heard")
+    print(f"transmits    {len(sent)} sent")
     print(f"noise        {len(noise)} signals under {MIN_FRAME_DURATIONS} durations")
     if ready:
         print(f"receiver     {ready[-1]['kind']} at {ready[-1]['at']}")
