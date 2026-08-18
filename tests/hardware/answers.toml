@@ -1,0 +1,7 @@
+# What the appliance did, recorded so nobody has to be asked twice.
+# Written by tests/hardware/conftest.py; committed as evidence.
+#
+# The question text is the key, so rewording a question orphans its
+# answer -- which is the intent: a different question needs asking again.
+
+[answers]

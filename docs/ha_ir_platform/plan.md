@@ -187,8 +187,7 @@ requires-python = ">=3.14"          # infrared-protocols needs 3.14; ha-core nee
 dependencies = ["infrared-protocols>=9"]
 
 [dependency-groups]
-dev = ["pytest"]
-hardware = ["httpx"]                # only for `pytest -m hardware`
+dev = ["pytest"]                    # no group for the hardware tests; see below
 
 [tool.pytest.ini_options]
 markers = [
@@ -205,7 +204,7 @@ installed at `~/.local/bin/uv`, which solves it without touching the system Pyth
 
 ```bash
 uv python install 3.14
-uv sync                 # or: uv sync --group hardware
+uv sync
 uv run pytest
 ```
 
@@ -675,8 +674,18 @@ that waits for the next one and `pytest.skip`s if the receiver never became avai
 skips printing the question).
 
 No direct connection to the ESPHome device is needed from the test process: the bench is
-already inside Home Assistant, on the other end of the same API. That is why the `hardware`
-dependency group carries only an HTTP client and not `aioesphomeapi`.
+already inside Home Assistant, on the other end of the same API. So there is no
+`aioesphomeapi`, and **no dependency group for the hardware tests at all** — REST over
+`urllib` is the whole requirement, and `uv run pytest -m hardware` needs nothing installed
+beyond the ordinary development environment.
+
+That is a constraint rather than a preference. `tests/hardware/conftest.py` is imported when
+pytest *enters the directory*, which happens on every run, before `-m` deselection and even
+when the directory holds no tests at all. A third-party client imported there breaks
+`uv run pytest` outright for anyone who has not installed it — demonstrated, not assumed: an
+`import httpx` in that file turned a passing 885-test run into `1 error during collection`.
+A test module may import whatever it likes, because it is only imported when it is about to
+be collected. A conftest has no such isolation.
 
 ### Always runs — pure Python, no HA, no hardware
 

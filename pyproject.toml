@@ -9,10 +9,12 @@ dependencies = ["infrared-protocols>=9"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
-# Only needed for `pytest -m hardware`, which drives Home Assistant over REST.
-# No aioesphomeapi: the acp35_bench component is already inside Home Assistant,
-# so the device is reached through the same API rather than a second connection.
-hardware = ["httpx>=0.28"]
+# No group for `pytest -m hardware`. It drives Home Assistant over REST, which
+# `urllib` does, and its conftest is imported during collection of *every* run --
+# before `-m` deselection -- so a third-party client there would break the
+# ordinary suite for anyone who had not installed it. No aioesphomeapi either:
+# acp35_bench is already inside Home Assistant, so the device is reached through
+# the same API rather than a second connection.
 
 [tool.uv]
 # Nothing here is installable; this repo is tooling, tests and a custom_component
