@@ -897,13 +897,45 @@ seconds. Because `tick` is applied above the clocksource, swapping between
 `hyperv_clocksource_tsc_page`, `hyperv_clocksource_msr` and `acpi_pm` changes
 nothing; all three measured 7–9.5% fast. **Keep the default clocksource.**
 
-The cause is two time disciplines fighting. WSL forces Hyper-V implicit time
-synchronization on — `hv_utils.timesync_implicit=1` is in `/proc/cmdline` and
-cannot reliably be overridden through `.wslconfig` on current versions — and
-Ubuntu ships systemd-timesyncd, which disciplines the same clock against
-ntp.ubuntu.com. Neither can win: correcting a percent-scale error needs far more
-than the 500 ppm `adjtimex` frequency cap, so both reach for `tick`, and it
-saturates.
+**Two disciplines, two references, one clock.** systemd-timesyncd disciplined the
+guest against ntp.ubuntu.com over the network, while Hyper-V's TimeSync feeds it
+the Windows host clock, which Windows keeps against time.windows.com. Independent
+controllers correcting the same clock from different sources interfere by
+construction, and they had something to disagree about: WSL's `CLOCK_REALTIME` sat
+between 0.55 s and 1.19 s away from the Windows clock across an evening of
+measurements. Removing one of them is what the fourfold improvement below came
+from.
+
+**What the conflict does not explain is the rate**, and that is the part still
+open. `tick_usec` has exactly one writer in the kernel —
+`if (txc->modes & ADJ_TICK) ntpdata->tick_usec = txc->tick;` in
+`kernel/time/ntp.c`. No kernel path reaches it, so a privileged userspace process
+is calling `adjtimex` with `ADJ_TICK` several times a minute, and neither
+discipline is known to be the one doing it:
+
+- **Not systemd-timesyncd alone.** Stopped, the tick kept being rewritten, twelve
+  times in ninety seconds — so it is not the only writer, whatever it does while
+  running.
+- **Not the Hyper-V guest driver.** `drivers/hv/hv_util.c` in the WSL 6.18 kernel
+  touches no frequency or tick at all; `hv_set_host_time` calls
+  `do_settimeofday64`, a step, and `timesync_implicit` only promotes a SAMPLE to a
+  SYNC when the guest is *behind* — "If set treat SAMPLE as SYNC when clock is
+  behind".
+- **Not [the wrong-MSR clocksource bug](https://github.com/microsoft/WSL2-Linux-Kernel/commit/73049104541866f41d5497d7a4cb23541812dc39)**,
+  which used an ARM64 register on x86 and "entirely breaks timekeeping on guests
+  without a TSC". It is fixed in this branch, dated one day before this kernel was
+  built, it is on the MSR path where ours is the TSC page, and `CLOCK_MONOTONIC_RAW`
+  reading correctly is direct evidence that the clocksource read it repairs is
+  already sound here.
+
+That driver does explain the **backward steps**: the guest runs fast, so stepping
+it to host time on a SYNC moves it back. The rate error is a separate fault on
+top.
+
+**A third distro can be the writer.** WSL2 runs every distro in one virtual
+machine sharing one kernel, and `docker-desktop` is running here, so a process
+outside Ubuntu sets the tick for Ubuntu and never appears in its `ps`. Finding it
+needs `strace` or `bpftrace` — neither installed — plus root.
 
 **Mitigation applied: systemd-timesyncd is disabled on this machine**
 (`timedatectl set-ntp false`), which is what [Ubuntu's own WSL
@@ -914,6 +946,13 @@ and `CLOCK_REALTIME`'s average rate went from 1.0039 to 0.9996. The backward
 steps continue, roughly three per 90 s, and the tick is still driven, so this
 reduces the problem rather than removing it. The guest now depends entirely on
 the Windows clock, which measured within 0.2% of ntp.ubuntu.com.
+
+Not worth re-reading: [the kernel's Hyper-V clocks
+page](https://docs.kernel.org/virt/hyperv/clocks.html) describes the reference
+TSC page and the synthetic 10 MHz counter, which is the layer measured as
+correct, and covers neither TimeSync nor `/dev/ptp_hyperv`. It does explain why
+swapping clocksources changed nothing: `tsc_page` and `msr` are two ways of
+reading the same counter.
 
 Environment, for a bug report: WSL 2.7.11.0, kernel 6.18.33.2-2, Windows
 10.0.26200.9168. `wsl --shutdown` does not clear it.
