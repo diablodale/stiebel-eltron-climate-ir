@@ -77,7 +77,7 @@ class TestSetup:
         assert attributes["target_temp_step"] == 1
 
     async def test_fan_modes_exclude_auto(self, hass: HomeAssistant, entry) -> None:
-        # Acp35Fan.AUTO is representable but never observed from the remote.
+        # The nibble can hold a fourth value; the appliance has no fourth speed.
         assert hass.states.get(CLIMATE_ID).attributes["fan_modes"] == [
             "low",
             "medium",

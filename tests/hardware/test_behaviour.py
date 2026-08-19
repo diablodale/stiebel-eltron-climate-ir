@@ -31,8 +31,8 @@ Two more are closed without measuring anything, and are recorded here so the
 reasoning is not lost:
 
 - **12**, fan `0` as an auto speed: the appliance and the remote both have three
-  fan speeds, so `Acp35Fan.AUTO` is never transmitted and `fan_modes` never gains
-  it. `FAN_SPEEDS` below is the whole set.
+  fan speeds, so there is no fourth for `0` to select. `Acp35Fan` has no member
+  for it, and `FAN_SPEEDS` below is therefore the whole enum.
 - **13**, a non-low fan in dry: the remote forces low in dry and will not let the
   fan button move it. The remote is the specification, so we never send anything
   else there -- which is why the mode/fan cross has ten cells and not twelve.
@@ -60,9 +60,9 @@ from devices.acp35.protocol import (
     effective_temperature,
 )
 
-# The three speeds the appliance and the remote actually have. `Acp35Fan.AUTO`
-# is a value the nibble can hold and the hardware cannot select; see question 12
-# in the module docstring.
+# The three speeds the appliance and the remote actually have, which is every
+# member of `Acp35Fan`. Spelled out rather than derived from the enum so that
+# adding a member could not silently enlarge a sweep run against an appliance.
 FAN_SPEEDS = (Acp35Fan.LOW, Acp35Fan.MEDIUM, Acp35Fan.HIGH)
 
 # Each stop is sent more than once. A single missed frame would otherwise read as

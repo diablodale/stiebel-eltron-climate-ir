@@ -49,9 +49,9 @@ MODE_TO_HVAC: Final[dict[Acp35Mode, HVACMode]] = {
     mode: hvac for hvac, mode in HVAC_TO_MODE.items()
 }
 
-# Acp35Fan.AUTO is deliberately absent. The nibble can hold it, but the remote's
-# fan button only cycles high -> medium -> low and it has never been observed, so
-# it is not offered until it has been tried against the unit.
+# Every speed the appliance has, so this mapping is total: `Acp35Fan` holds three
+# members and all three appear here. There are no other fan speeds -- see
+# the note on the nibble's unused values in `Acp35Fan`.
 FAN_TO_ACP: Final[dict[str, Acp35Fan]] = {
     FAN_LOW: Acp35Fan.LOW,
     FAN_MEDIUM: Acp35Fan.MEDIUM,

@@ -6,6 +6,7 @@ from devices.acp35.protocol import (
     BIT_MARK,
     CARRIER_HZ,
     HEADER_MARK,
+    HEADER_SPACE,
     MAX_CELSIUS,
     MAX_FAHRENHEIT,
     MAX_TIMER_HOURS,
@@ -318,6 +319,41 @@ class TestDecoding:
         timings = cool_high().get_raw_timings()
         timings[3] = -ONE_SPACE  # corrupt b0's top bit
         assert Acp35Command.from_raw_timings(timings) is None
+
+    @pytest.mark.parametrize(
+        ("description", "b6"),
+        [
+            ("fan 0, once called AUTO", 0x01),
+            ("fan 4", 0x41),
+            ("fan 15", 0xF1),
+            ("mode 4", 0x14),
+            ("mode 15", 0x1F),
+        ],
+    )
+    def test_rejects_a_valid_frame_carrying_an_undefined_nibble(self, description, b6):
+        """Both nibbles of b6 are wider than the values defined for them.
+
+        Twelve of sixteen mean nothing to this protocol in each, and passing the
+        checksum does not make one real. Refusing them has to happen in the
+        decoder: `Acp35Mode(4)` and `Acp35Fan(4)` raise, and this path runs inside
+        the receiver's callback, where an exception ends the subscription rather
+        than dropping one frame.
+
+        Fan 0 is here for a second reason. It used to decode, as a member named
+        AUTO invented from the nibble's width, and it now refuses like every
+        other value nothing evidences.
+        """
+        state = [0x55, 0x72, 0, 0x0E, 0, 0, b6, 0x80]
+        state.append(sum(state) & 0xFF)
+        timings: list[int] = [HEADER_MARK, -HEADER_SPACE]
+        for byte in state:
+            for shift in range(7, -1, -1):
+                timings.append(BIT_MARK)
+                timings.append(-(ONE_SPACE if (byte >> shift) & 1 else ZERO_SPACE))
+        timings.append(BIT_MARK)
+
+        assert Acp35Command.from_raw_timings(timings) is None, description
+        assert Acp35Command.all_from_raw_timings(timings) == [], description
 
 
 # The gap seen between two frames the receiver delivered in one buffer. Inside

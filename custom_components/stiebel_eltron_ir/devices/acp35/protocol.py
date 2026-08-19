@@ -163,14 +163,15 @@ class Acp35Mode(IntEnum):
 class Acp35Fan(IntEnum):
     """Fan speed, held in the high nibble of b6.
 
-    AUTO is inferred from the nibble's width and is never transmitted. The
-    remote's fan button only cycles high -> medium -> low, and the appliance's
-    own panel has the same three speeds, so there is no fourth speed to select
-    and nothing for this value to mean. It stays because the nibble can hold it
-    and a received frame must decode; `fan_modes` does not offer it.
+    Three values, because the appliance has three speeds: the remote's fan button
+    cycles high -> medium -> low, and the unit's own panel offers the same three.
+
+    There is deliberately no member for 0. No capture contains it, the remote
+    cannot emit it, and there is no fourth speed for it to select. A frame
+    carrying 0 is refused by `_decode_leading_frame`, as are the twelve other
+    values this nibble can hold and this protocol has no meaning for.
     """
 
-    AUTO = 0
     LOW = 1
     MEDIUM = 2
     HIGH = 3
@@ -446,6 +447,19 @@ class Acp35Command(Command):
         if state[0] != PREAMBLE or sum(state[:-1]) & 0xFF != state[-1]:
             return None, 0
 
+        # Both nibbles of b6 are four bits wide and only three values of each are
+        # defined, so twelve of sixteen mean nothing to us in either. A frame
+        # carrying one is not a frame we can act on, and it is refused here
+        # rather than raised out of the constructor: every other undecodable
+        # input returns None, and this one arrives inside the receiver's
+        # callback, where an exception would take down the subscription rather
+        # than drop a frame. Passing the checksum does not make a value real.
+        try:
+            mode = Acp35Mode(state[6] & 0x0F)
+            fan = Acp35Fan(state[6] >> 4)
+        except ValueError:
+            return None, 0
+
         consumed = offset + BIT_COUNT * 2
         # The trailer mark closes the frame and belongs to it. The space after it
         # does not get consumed here: the next frame's decode strips it as its
@@ -456,8 +470,8 @@ class Acp35Command(Command):
 
         return cls(
             power=bool(state[1] & _POWER_MASK),
-            mode=Acp35Mode(state[6] & 0x0F),
-            fan=Acp35Fan(state[6] >> 4),
+            mode=mode,
+            fan=fan,
             celsius=(state[1] >> 4) + _CELSIUS_BIAS,
             fahrenheit=state[3] + _FAHRENHEIT_BIAS,
             timer_hours=state[2],
