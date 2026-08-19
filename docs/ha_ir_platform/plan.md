@@ -1108,7 +1108,7 @@ value would ship an integration whose controls are confidently mislabelled.
 | - | -------- | ------ | -------------------------------- |
 | ~~7~~ | ~~Does the unit accept our frame, and with which header mark?~~ **Answered 2026-08-18: `HEADER_MARK = 5100`, the shipped value.** Each candidate went out carrying its own setpoint; the panel showed 22 °C, which belongs to 5100 — sent **first**, so nothing sent after it was accepted as a command. 4400, 3000, 9000 and no header at all did not set the setpoint. Every transmission is confirmed in the journal, so the unit's silence is established rather than assumed — but it was run with the emitter across the room, where a third of correct frames were later found to be going astray, so read it with *Emitter placement is a measurement variable* below | — | — |
 | ~~8~~ | ~~Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C?~~ **Answered 2026-08-19: yes, all sixteen.** Every mode against every fan speed the hardware has, plus 17 °C and 30 °C, was transmitted and read blind off the panel; every reading matched what was sent. The enum mapping in `protocol.py` is now measured rather than inferred. **The timer half is answered too, 2026-08-19: our frames clear it.** A timer armed at 3 h on the remote was cleared by one ordinary setpoint change of ours, which the appliance demonstrably acted on — the panel moved 23 → 24 °C at the same time. So any command from Home Assistant clears a timer set on the remote, which is the settled consequence of not transmitting timers rather than a fault; see *The timer read-out is read-only* | `test_behaviour.py`, `test_timer.py` | — |
-| 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
+| ~~9~~ | ~~Minimum gap between frames, and whether one frame is reliably enough~~ **Answered 2026-08-19: one frame is enough, and no minimum gap is needed.** Twenty single frames, sent one at a time and read off the panel individually, were acted on twenty times. Eight pairs at separations from 100 ms down to 500 µs each ended in the state the *second* frame asked for, so the appliance never dropped it. `repeat_count = 0` and the absence of rate limiting in `_async_transmit` are both confirmed rather than assumed | — | — |
 
 Why this order: until the unit responds to anything, neither of the others can be
 attempted, so 7 led. 8 then establishes that a given command is acted on, which 9
@@ -1230,15 +1230,62 @@ One consequence for the procedure below: **a buffer is not a frame.** A 296-
 duration capture is two frames, not a corrupt one, and counting buffers would
 under-count what the unit received.
 
-Two things to try, once 8 has established that the unit reliably acts on a command
-sent in isolation — without that baseline a missed frame here is unattributable:
+Question 8 has since established that the unit acts on a command sent in
+isolation, so a missed frame here is attributable. `test_frame_timing.py` is
+written and does the two measurements in separate classes, either runnable alone
+with `-k`:
 
-1. **Reliability of a single frame.** Send the same command 20 times with a long
-   pause between, and count how many the unit acts on. If any are missed,
-   `repeat_count` needs raising and the frame is not as unrepeated as the remote
-   made it look.
-2. **Back-to-back frames.** Home Assistant can easily issue two service calls in
-   quick succession — a mode change and a temperature change from one script — and
-   the entity sends a full frame for each with no delay between. Send two frames
-   at decreasing separations to find where the unit starts dropping them, and add
-   a minimum spacing in `_async_transmit` if one is needed.
+1. **Reliability of a single frame.** Twenty frames, one at a time, three seconds
+   apart, each moving the setpoint, with the panel read after every one. If any
+   are missed, `repeat_count = 0` is not safe and the frame is not as unrepeated
+   as the remote made it look. It has to be one question per frame: the protocol
+   carries absolute state, so a frame missed inside a burst leaves no trace once
+   the next one lands.
+2. **Back-to-back frames.** Two frames at shrinking separations, to find where the
+   unit stops acting on the second, which is the number `_async_transmit` would
+   need. Only the second matters — Home Assistant sending two changes in quick
+   succession must end in the state the second asked for, and the unit ignoring
+   the first is the same outcome as obeying both.
+
+**The pair is one transmission, not two service calls**, which is a deliberate
+departure from how the procedure was first described. Two calls put the gap at the
+mercy of the transport, which does not preserve it. A pair of frames is 295
+durations against the bench's 1024 limit, so both go over as a single waveform
+with the separation written into it and timed by the ESP32. That measures the
+appliance instead of the transport — and it bounds the real case rather than
+reproducing it, since the transport still sits between Home Assistant and the LED.
+
+Separations run 100 ms down to 500 µs: 100 ms is the longest single duration the
+bench accepts, and below a bit mark the two frames stop being separable at all.
+Below the receiver's 10 ms idle timeout the pair arrives in one buffer and the gap
+is read back from it as a single duration; above it the buffer is closed between
+the two and the figure is the one we wrote, not one we measured. The test says
+which is which rather than presenting them alike.
+
+**Answered 2026-08-19. Both halves came back clean.**
+
+- **Twenty single frames, twenty acted on.** Each went out once, was confirmed on
+  the air, and moved the panel. `repeat_count = 0` is safe.
+- **Every pair ended on its second frame**, at all eight separations down to
+  500 µs. There is no spacing below which the appliance drops the second, so
+  `_async_transmit` needs no rate limiting, and two service calls issued together
+  from one script are safe.
+
+The four separations under the idle timeout were measured off the device and
+agree with what was requested, each **20 µs long**: 520, 1020, 2019 and 5019 µs.
+That bias is not error — it is ESPHome's `MARK_EXCESS_MICROS`, which shortens
+marks and lengthens spaces by the same 20 µs, and the protocol document already
+removes it from the figures averaged out of the captures. Its appearance here,
+in a duration nobody averaged, is independent confirmation of the compensation
+rather than a measurement to correct.
+
+One receive glitch is worth recording because it shaped a test. At 10 ms the
+receiver closed its buffer inside the gap, so the second frame's echo arrived
+without its header mark — the corpus shape, 147 durations starting at the header
+space — and cell 29 came back at 707 µs, between a zero (≤ 673) and a one
+(≥ 1157), so it did not decode. **The appliance had already acted on that pair.**
+The frame reached the air and the buffer beside the emitter was damaged, which is
+ambient infrared doing what `test_loopback` already retries around. So the echo
+check now applies only to rows the appliance did *not* obey: those are where
+"never sent" and "sent and ignored" differ, and demanding a clean echo everywhere
+would fail on our own receiver.

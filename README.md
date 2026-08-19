@@ -87,10 +87,11 @@ The protocol is verified against a real ACP 35, not only against captures:
   after it, was settled by transmitting candidates at the appliance
 - the appliance acts on the display-unit flag and on the mode carried in a
   power-off frame
+- a single frame is enough, and two sent back to back are both acted on down to a
+  separation of 500 µs, so nothing here repeats or rate-limits
 
-One item remains open: the minimum spacing between frames, and whether a single
-frame is reliably enough. Details, and everything the hardware settled, are in
-[plan.md](docs/ha_ir_platform/plan.md).
+**Every question the hardware had to settle is answered.** What each session
+measured, and what it ruled out, is in [plan.md](docs/ha_ir_platform/plan.md).
 
 ## Development
 
