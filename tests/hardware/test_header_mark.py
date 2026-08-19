@@ -192,8 +192,8 @@ class TestWhichHeaderMarkTheUnitAccepts:
 
         The setpoint is the carrier and the appliance pins it outside cool, so the
         panel would show a number that identifies no candidate. Failing here says
-        which pass to repeat; recording the number would put a meaningless answer
-        in `answers.toml` permanently.
+        which pass to repeat; recording the number would leave a meaningless
+        answer in `answers.toml` to be asserted against on every later run.
         """
         unreadable = [name for name, reading in bisect.items() if reading.unreadable]
         assert not unreadable, (

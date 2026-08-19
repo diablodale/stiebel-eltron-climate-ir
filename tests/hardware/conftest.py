@@ -45,8 +45,15 @@ from hw import (
 
 HERE = Path(__file__).resolve().parent
 
-# Committed, unlike the journal beside it. A recorded answer is evidence, and
-# `git log` is the record of when the device said so.
+# Gitignored, like the journal beside it, and for the same reason: it records one
+# session rather than a fact about the appliance. Question 8 was run twice on
+# 2026-08-19 and produced contradictory answers to identical questions, the only
+# difference being where the emitter sat. Committing that as evidence would give
+# it a durability it does not have. The conclusions belong in
+# `docs/ha_ir_platform/plan.md`, dated and with their conditions stated.
+#
+# What it is still for: a session stopped part-way keeps the answers already
+# given, and a non-interactive run has something to check rather than nothing.
 ANSWERS = HERE / "answers.toml"
 
 JOURNAL = HERE / "journal.jsonl"
@@ -384,8 +391,11 @@ def _toml_string(value: str) -> str:
 def _save_answers(answers: dict[str, str]) -> None:
     """Rewrite the answers file, sorted so a diff shows only what changed."""
     lines = [
-        "# What the appliance did, recorded so nobody has to be asked twice.",
-        "# Written by tests/hardware/conftest.py; committed as evidence.",
+        "# What one session read off the appliance's panel.",
+        "# Written by tests/hardware/conftest.py. Gitignored, and not evidence:",
+        "# the same questions have been answered differently by the same appliance",
+        "# depending only on where the emitter sat. Delete a line to be asked again,",
+        "# and delete the file to run a session from scratch.",
         "#",
         "# The question text is the key, so rewording a question orphans its",
         "# answer -- which is the intent: a different question needs asking again.",

@@ -12,3 +12,10 @@ __pycache__/
 # `tools/hw.py pronto`; the rest is session noise.
 tests/hardware/journal.jsonl
 tests/hardware/journal.*.jsonl
+
+# What a human read off the appliance's panel during one session. Kept only so
+# stopping a session part-way does not lose the answers already given: an answer
+# is not a durable fact about the appliance, it is a fact about one session, and
+# the same test has produced contradictory answers depending only on where the
+# emitter sat. The conclusions live in docs/ha_ir_platform/plan.md.
+tests/hardware/answers.toml

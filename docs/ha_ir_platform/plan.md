@@ -777,8 +777,20 @@ against it non-interactively; missing with a tty attached means it prompts and r
 what it is told; missing with no tty means the test **skips and prints the question**.
 
 `uv run pytest -m hardware` is therefore always safe to run, and its output is a precise
-list of what remains unanswered. Nothing is asked twice, and every answer keeps its
-evidence beside it.
+list of what remains unanswered.
+
+**The file is gitignored and is not evidence.** It records one session, not a fact
+about the appliance: question 8 was run twice on 2026-08-19 and answered its own
+questions contradictorily, the only difference being where the emitter sat. Two
+consequences follow, and both matter more than the convenience above:
+
+- **A recorded answer is asserted instead of the appliance.** Re-running a sweep
+  transmits every frame again and then compares strings to themselves; only the
+  loopback assertions genuinely re-verify anything. A green re-run is not a fresh
+  measurement, and nothing about it should be read as one.
+- **Conclusions belong here, not there.** This document carries them with their
+  dates and their conditions; the answers file carries neither. Delete a line to be
+  asked again, or the file to run a session from scratch.
 
 Where a question needs the operator's eyes, prefer encoding the answer in the unit's own
 display over asking once per case. The header-mark bisect sends each candidate as a
@@ -1073,30 +1085,65 @@ value would ship an integration whose controls are confidently mislabelled.
 
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
-| ~~7~~ | ~~Does the unit accept our frame, and with which header mark?~~ **Answered 2026-08-18: `HEADER_MARK = 5100`, the shipped value.** Each candidate went out carrying its own setpoint; the panel showed 22 °C, which belongs to 5100 — sent **first**, so nothing sent after it was accepted as a command. 4400, 3000, 9000 and no header at all did not set the setpoint. That is narrower than "were ignored": the descending pass showed a wrong header can still make the unit act, on something other than what was sent. Every transmission is confirmed in the journal, so the unit's silence is established rather than assumed | — | — |
-| 8 | Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C? Every frame we send carries `b2 = 0` with `b1` bit 3 clear: does that **cancel** a timer armed from the remote, or is it treated as no change? | `test_behaviour.py` | the whole of `const.py`'s enum mapping, and the read-only timer decision above |
+| ~~7~~ | ~~Does the unit accept our frame, and with which header mark?~~ **Answered 2026-08-18: `HEADER_MARK = 5100`, the shipped value.** Each candidate went out carrying its own setpoint; the panel showed 22 °C, which belongs to 5100 — sent **first**, so nothing sent after it was accepted as a command. 4400, 3000, 9000 and no header at all did not set the setpoint. Every transmission is confirmed in the journal, so the unit's silence is established rather than assumed — but it was run with the emitter across the room, where a third of correct frames were later found to be going astray, so read it with *Emitter placement is a measurement variable* below | — | — |
+| 8 | ~~Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C?~~ **Answered 2026-08-19: yes, all sixteen.** Every mode against every fan speed the hardware has, plus 17 °C and 30 °C, was transmitted and read blind off the panel; every reading matched what was sent. The enum mapping in `protocol.py` is now measured rather than inferred. **Still open:** every frame we send carries `b2 = 0` with `b1` bit 3 clear — does that **cancel** a timer armed from the remote, or is it treated as no change? | `test_behaviour.py`, and the timer half still to be written | the read-only timer decision above |
 | 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
 
 Why this order: until the unit responds to anything, neither of the others can be
 attempted, so 7 led. 8 then establishes that a given command is acted on, which 9
 depends on — "did it act on the frame" is the measurement 9 repeats at shrinking gaps.
+That dependency now has a condition attached: 9 must be run with the emitter close
+to the appliance, or it will measure the room rather than the protocol.
 
-**A wrong header mark is not simply ignored.** Answering 7 produced one result
-nobody asked for: during the descending pass the appliance went to auto with a low
-fan, although every frame sent carried cool and medium. Nothing else transmits, so
-the unit acted on a command we did not send — most likely a wrong header leaving
-its bit sampling shifted, so the same waveform decodes as something else. Two
-consequences:
+### Emitter placement is a measurement variable, not a detail
 
-- **Never ship an unverified header mark.** A wrong one can drive the appliance
-  somewhere unintended rather than doing nothing.
+Question 8 was run twice on 2026-08-19 and the two runs disagree completely. With
+the emitter across the room from the appliance, **6 of 16 commands were not obeyed**;
+with it moved close to the appliance's infrared window with clear line of sight,
+**all 16 were**. Nothing else changed — same frames, same code, same answers file
+cleared between runs.
+
+The first run is kept as `journal.2.jsonl`, and it is worth reading, because the
+failures were not simple silence:
+
+- Sent cool **high** while the unit sat at cool medium; it went to cool **low**.
+- Sent **fan** medium while the unit sat in fan; it went to **cool** low.
+- Sent a frame **byte-for-byte identical to one the remote itself produced** —
+  `55 62 00 0D 00 00 30 80 74`, auto/high/22 °C, matching a corpus capture — and
+  the unit did not obey it.
+
+So marginal reception does not merely drop commands, it produces **wrong ones**: a
+mangled frame can still parse into a valid command that was never sent. The ACP 35
+therefore does not appear to verify the checksum, since a corrupted frame should
+have been rejected outright.
+
+**The loopback cannot detect any of this, and never could.** The receiver sits
+beside the emitter, not beside the appliance, so a clean 148-duration echo proves
+the LED did its job and says nothing about what arrived across the room. In both
+runs every frame was confirmed on the air; only the appliance's behaviour differed.
+Any hardware result gathered from a distance is suspect on this evidence, and any
+session should place the emitter close before drawing conclusions.
+
+**A wrong header mark may not be simply ignored.** During question 7's descending
+pass the appliance went to auto with a low fan although every frame sent carried
+cool and medium, and that was attributed to a wrong header leaving the unit's bit
+sampling shifted. That attribution is now doubtful: the emitter was in the far
+position, and the far-position run of question 8 produced exactly the same class of
+behaviour with a *correct* header mark. Reception is the simpler explanation, and it
+covers both. Two consequences survive either way:
+
+- **Never ship an unverified header mark.** Whatever the mechanism, the appliance
+  has been observed acting on commands that were never sent.
 - **The setpoint only works as a carrier while the unit stays in cool**, since auto
-  and dry pin it. `test_header_mark.py` now takes `changed` as an answer and fails
-  that pass instead of recording a number that identifies nothing.
+  and dry pin it. `test_header_mark.py` takes `changed` as an answer and fails that
+  pass instead of recording a number that identifies nothing.
 
-The descending pass is therefore unanswered. It would say whether more than one
-header mark is accepted; 5100 being accepted and the four sent after it being
-refused does not depend on it.
+**Question 7's conclusion stands but its margin is thinner than recorded.** 5100 was
+accepted and the four candidates sent after it set nothing, across three repeats
+each — at a distance where roughly a third of correct frames were being lost. That
+still makes four candidates failing twelve times unlikely to be chance, but it is
+weaker evidence than it appeared. Re-running it close to the appliance would settle
+it properly, and would also answer the descending pass, which remains open.
 
 **Questions 10–15: everything else.** Each would refine behaviour at the edges or let
 a restriction be lifted, and each has a defensible answer already committed to code,
@@ -1105,18 +1152,22 @@ so none of them gates a release.
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
 | ~~10~~ | ~~Do our frames reach the air as the bytes we built?~~ **Answered 2026-08-18: yes, for every state the remote was recorded producing.** All 76 distinct corpus frames were re-encoded, transmitted and heard back, each decoding to the bytes the remote itself produced. Nothing between `get_raw_timings()` and the LED reshapes the waveform, and a non-default carrier reaches it too, which question 7's fallback needs | — | — |
-| 11 | Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough? | `test_behaviour.py` | `_build_command` mirrors the remote's event bits — safe either way, so this only buys simplification |
-| 12 | Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed? | `test_behaviour.py` | whether `fan_modes` can gain `auto` |
-| 13 | Does the unit accept a non-low fan in dry mode? | `test_behaviour.py` | nothing any more. The remote forces low in dry and will not let the fan button move it, so `effective_fan()` mirrors that and we never send one. Answering this could relax the restriction, not fix a bug. |
+| ~~11~~ | ~~Does the unit require the `b7` event bits, or is a constant `CELSIUS` enough?~~ **Answered 2026-08-19: they are not required.** The same setpoint change was sent twice, differing only in `TEMP_CHANGED`; the unit acted on both. `b7` could become a constant and `_build_command` could stop tracking which button a change came from. Mirroring the remote is still what ships, because it costs nothing and the remote is the specification — this only records that the simplification is available | — | — |
+| ~~12~~ | ~~Does the unit accept fan `0` (`b6` = `0x0x`) as an auto speed?~~ **Closed 2026-08-19 by observation, not by test.** The appliance and the remote both have exactly three fan speeds. `Acp35Fan.AUTO` is a value the nibble can hold and the hardware cannot select, so it is never transmitted and `fan_modes` never gains it | — | — |
+| ~~13~~ | ~~Does the unit accept a non-low fan in dry mode?~~ **Closed 2026-08-19 by decision.** The remote forces low in dry and will not let the fan button move it. The remote is the specification, so we never send anything else there and never ask the unit what it would do — which is why the mode/fan sweep has ten cells and not twelve | — | — |
 | ~~14~~ | ~~Does the unit act on the unit flag?~~ **Answered 2026-08-13: it acts on it.** Pressing C/F on the remote changes the appliance's own display panel to the chosen unit. That makes the scale the appliance shows the scale the user reads, so the climate entity now reports whichever one `b7` bit 7 selects rather than always Celsius. | — | — |
-| 15 | Does a power-off frame really leave the mode running in `b6`? | `test_behaviour.py` | `async_set_hvac_mode(OFF)` keeps the last mode |
+| ~~15~~ | ~~Does a power-off frame really leave the mode running in `b6`?~~ **Answered 2026-08-19: the unit acts on the nibble.** With the appliance confirmed in cool, a power-off frame carrying `fan` in `b6` switched it off; started again from the button on the appliance itself — which carries no mode — it came up in **fan**, the mode the frame carried, not the cool it had been running. `async_set_hvac_mode(OFF)` keeping the last mode is therefore load-bearing rather than incidental: what we put in `b6` of an off frame is what the unit resumes | — | — |
 
 Why 10 led: it is the only fully automatic test in the hardware set, and answering it
-first turns a failure of 7 into a diagnosis rather than a guess. It is now answered,
-so **a question 7 failure means the unit did not act on a frame that provably went out
-correctly** — which is the whole value of having run it first. The saturation worry
-that kept it out of the blocking group did not materialise. 12 is worth pairing with
-3, which asks the same thing of the remote.
+first turns a failure elsewhere into a diagnosis rather than a guess. The saturation
+worry that kept it out of the blocking group did not materialise.
+
+**It proves less than was claimed for it, though.** "The frame provably went out
+correctly" is exactly what it establishes, and question 8's two runs showed that is
+not the same as the frame arriving correctly — the receiver sits beside the emitter.
+So a failure elsewhere narrows to *the appliance did not act on a frame that left
+correctly*, which still includes everything that happens in the air between them.
+Only emitter placement rules that half out, and no test can.
 
 ### Procedures for questions 1–6
 
