@@ -44,17 +44,53 @@ infrared receiver is configured it follows the physical remote; without one the
 integration works exactly the same, it just cannot notice the remote being used.
 
 The timer is read-only in both directions: no frame this integration sends carries
-one, so **the first change made in Home Assistant cancels a timer set on the
-remote**. The appliance acting on its own timer emits no infrared, so a timer we
-heard could never be tracked to expiry — retransmitting it would eventually re-arm
-one that had already fired and switch the appliance off unbidden.
+one, so **the first change made in Home Assistant clears a timer set on the
+remote**. That is measured against the appliance, not inferred — a timer armed at
+3 hours was gone after a single temperature change.
+
+Two consequences worth knowing before you rely on it:
+
+- **The handset does not notice.** It never hears our frames, so it goes on
+  displaying the timer it set, and pressing TIMER reopens at that stale value. The
+  appliance and the remote disagree until the remote is used again.
+- **Use a Home Assistant automation instead.** It keeps accurate time, and because
+  every frame carries the whole state, firing power, mode, fan and temperature
+  together at the scheduled moment does more than the remote's timer can.
+
+The alternative was rejected deliberately. The appliance acting on its own timer
+emits no infrared, so a timer we heard could never be tracked to expiry;
+retransmitting it would eventually re-arm one that had already fired and switch
+the appliance off unbidden. Losing a timer you set is the smaller failure.
+
+## Emitter placement matters more than you would expect
+
+**Put the emitter where it has a clear, close line of sight to the appliance's
+infrared window.** Marginal reception does not simply lose commands — it produces
+wrong ones. Measured on 2026-08-19, with the emitter across the room: of sixteen
+commands, six were not obeyed, and the appliance twice acted on something that was
+never sent, once switching from cool to fan. Moved close, all sixteen were obeyed.
+
+The frames themselves were confirmed correct on the air in both runs, so nothing
+in Home Assistant or the emitter can detect this. A frame corrupted in flight can
+still decode as a valid, different command, which means the appliance does not
+appear to verify the checksum the protocol carries.
 
 ## Status
 
-Working against the protocol as captured, and unverified against the appliance
-itself. The open items are listed in [plan.md](docs/ha_ir_platform/plan.md) — the
-significant one is the header mark, which no capture contains because the
-receiver's buffer begins after it.
+The protocol is verified against a real ACP 35, not only against captures:
+
+- every mode, every fan speed and both ends of the temperature range are acted on
+  as this integration labels them
+- the frames we build reach the air unchanged — all 76 distinct frames the remote
+  was ever recorded producing were transmitted and read back identically
+- the header mark, which no capture contains because the receiver's buffer begins
+  after it, was settled by transmitting candidates at the appliance
+- the appliance acts on the display-unit flag and on the mode carried in a
+  power-off frame
+
+One item remains open: the minimum spacing between frames, and whether a single
+frame is reliably enough. Details, and everything the hardware settled, are in
+[plan.md](docs/ha_ir_platform/plan.md).
 
 ## Development
 

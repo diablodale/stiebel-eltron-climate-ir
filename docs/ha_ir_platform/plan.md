@@ -577,10 +577,31 @@ Consequences worth stating:
   the appliance afterwards, because the appliance kept counting down. The
   entity's own `last_reported` is what tells the user how fresh a reading is.
 
-Untested, and question 8 must confirm it: that a frame with `b2 = 0` and `b1`
-bit 3 clear *cancels* an armed timer rather than being treated as no change. The
-remote emits that byte pattern whenever no timer is set, so the appliance
-certainly accepts it; that it clears one is inference.
+**Measured 2026-08-19, and the inference was right: our frames clear the timer.**
+A timer armed at 3 h on the remote (`55 7A 03 0E 00 00 21 82 83`) was cleared by
+one ordinary setpoint change of ours (`55 82 00 10 00 00 21 C0 C8`), which the
+appliance demonstrably received — the panel moved from 23 to 24 °C at the same
+time. So **any command sent from Home Assistant clears a timer the user set on
+the remote.**
+
+That is the price of this decision, not an argument against it. The remote is the
+specification for what the bytes mean and what the appliance does with them; it
+does not oblige us to implement every feature it has. The frames we send are ones
+the remote itself emits whenever no timer is set, and the appliance treats them
+exactly as it treats the remote's. Choosing not to transmit timers is a scope
+decision, and this is its consequence — now measured rather than assumed, and
+pinned by `test_timer.py` so a change in the appliance's behaviour would show up.
+
+**Users are told in the README**, since a timer set on the remote disappearing
+after an unrelated adjustment in Home Assistant is surprising, along with the two
+consequences that follow: the handset does not notice and goes on displaying the
+timer it set, and a Home Assistant automation does the job better anyway because
+every frame carries the whole state.
+
+Not in the entity's description, because Home Assistant has none. Entity
+translations accept `name`, `state`, `state_attributes` and `unit_of_measurement`
+and nothing else — see `script/hassfest/translations.py` in ha-core. The entity
+name carries what it can: *Last known timer*.
 
 ### The shadow state is stored per config entry. Settled 2026-08-16
 
@@ -1086,7 +1107,7 @@ value would ship an integration whose controls are confidently mislabelled.
 | # | Question | Run by | What currently assumes an answer |
 | - | -------- | ------ | -------------------------------- |
 | ~~7~~ | ~~Does the unit accept our frame, and with which header mark?~~ **Answered 2026-08-18: `HEADER_MARK = 5100`, the shipped value.** Each candidate went out carrying its own setpoint; the panel showed 22 °C, which belongs to 5100 — sent **first**, so nothing sent after it was accepted as a command. 4400, 3000, 9000 and no header at all did not set the setpoint. Every transmission is confirmed in the journal, so the unit's silence is established rather than assumed — but it was run with the emitter across the room, where a third of correct frames were later found to be going astray, so read it with *Emitter placement is a measurement variable* below | — | — |
-| 8 | ~~Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C?~~ **Answered 2026-08-19: yes, all sixteen.** Every mode against every fan speed the hardware has, plus 17 °C and 30 °C, was transmitted and read blind off the panel; every reading matched what was sent. The enum mapping in `protocol.py` is now measured rather than inferred. **Still open:** every frame we send carries `b2 = 0` with `b1` bit 3 clear — does that **cancel** a timer armed from the remote, or is it treated as no change? | `test_behaviour.py`, and the timer half still to be written | the read-only timer decision above |
+| ~~8~~ | ~~Does the unit act correctly on every command we can produce — each mode, each fan speed, 17 °C and 30 °C?~~ **Answered 2026-08-19: yes, all sixteen.** Every mode against every fan speed the hardware has, plus 17 °C and 30 °C, was transmitted and read blind off the panel; every reading matched what was sent. The enum mapping in `protocol.py` is now measured rather than inferred. **The timer half is answered too, 2026-08-19: our frames clear it.** A timer armed at 3 h on the remote was cleared by one ordinary setpoint change of ours, which the appliance demonstrably acted on — the panel moved 23 → 24 °C at the same time. So any command from Home Assistant clears a timer set on the remote, which is the settled consequence of not transmitting timers rather than a fault; see *The timer read-out is read-only* | `test_behaviour.py`, `test_timer.py` | — |
 | 9 | Minimum gap between frames, and whether one frame is reliably enough | `test_frame_timing.py` | `repeat_count = 0` and no rate limiting between rapid service calls |
 
 Why this order: until the unit responds to anything, neither of the others can be

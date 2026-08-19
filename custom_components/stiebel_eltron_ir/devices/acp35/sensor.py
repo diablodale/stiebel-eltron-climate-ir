@@ -20,10 +20,14 @@ reasons, and the first two are not implementation gaps:
   firing power, mode and fan together at the scheduled moment is the same thing
   -- and keeps accurate time while doing it.
 
-**Anything changed in Home Assistant cancels a timer set on the remote.** Our
+**Anything changed in Home Assistant clears a timer set on the remote.** Our
 frames carry `timer_hours=0`, so the first one sent after the remote armed a
-timer clears it. The handset does not hear that frame and goes on displaying the
-timer it set, so the two disagree until the remote is used again.
+timer clears it. Measured against the appliance on 2026-08-19 rather than
+inferred: a timer armed at 3 h was gone after one setpoint change, which the
+appliance demonstrably acted on. The handset does not hear that frame and goes on
+displaying the timer it set -- it was seen reopening at the stale value -- so the
+two disagree until the remote is used again. `tests/hardware/test_timer.py` pins
+this, so the appliance behaving differently would be reported.
 
 That is a deliberate cost, chosen against the alternative. Replaying the value we
 last heard is what the remote does, but the remote can do it correctly because it
