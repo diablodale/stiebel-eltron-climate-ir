@@ -94,12 +94,16 @@ differs purely by which button produced the frame — `0xC0` after a temperature
 | 5,4,2 | — | never observed set. |
 
 So bits 6, 3 and 1 are never "always 1" or "always 0" — they are `1` in the one frame that
-button produces and `0` everywhere else. Their *purpose* is untested; most likely they
+button produces and `0` everywhere else. Their *purpose* remains unknown; most likely they
 tell the indoor unit which field changed so it can flash the right segment on its display.
+What is known is that it does not need them — see below — so whatever they are for, nothing
+we send depends on getting them right.
 
-**Open question, deferred to testing:** does the unit require them, or does it act on
-`b1`/`b2`/`b3`/`b6` regardless? Until that is answered the encoder reproduces the remote's
-behaviour byte-for-byte, which the captures fully specify.
+**Answered 2026-08-19 — the unit does not require them.** The same setpoint change was
+sent twice, differing only in `TEMP_CHANGED`, and the appliance acted on both. `b7` could
+be reduced to the display-unit bit. The encoder still reproduces the remote byte-for-byte,
+because the remote is the specification and mirroring it costs nothing; the simplification
+is recorded as available, not taken.
 
 ## Physical layer
 
@@ -307,11 +311,11 @@ field, a state byte list, checksum appended last, validation in `__init__`):
 
 ```python
 CARRIER_HZ  = 38000    # not measured; ESPHome hardcodes 38 kHz when dumping Pronto
-HEADER_MARK = 5100     # UNVERIFIED. candidates: 5100, 4400, 3000, 9000, 0 (none)
+HEADER_MARK = 5100     # verified against the appliance 2026-08-18
 HEADER_SPACE, BIT_MARK, ZERO_SPACE, ONE_SPACE = 5100, 576, 481, 1928
 
 class Acp35Mode(IntEnum):   AUTO = 0; COOL = 1; DRY = 2; FAN = 3
-class Acp35Fan(IntEnum):    AUTO = 0; LOW = 1; MEDIUM = 2; HIGH = 3   # AUTO unverified
+class Acp35Fan(IntEnum):    AUTO = 0; LOW = 1; MEDIUM = 2; HIGH = 3   # AUTO never sent
 
 class Acp35Flag(IntFlag):   CELSIUS = 0x80; TEMP_CHANGED = 0x40; POWER_PRESSED = 0x08
                             TIMER_UI = 0x02

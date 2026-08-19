@@ -28,9 +28,10 @@ class Acp35Entity(StiebelEltronIrEntity):
         else, exactly what the remote sends for a fan, mode or C/F press.
 
         b7 carries the display unit plus an event bit naming what the user just
-        changed, mirroring what the remote emits. Whether the unit needs the
-        event bits at all is untested; if it turns out not to, every caller can
-        simply stop passing one.
+        changed, mirroring what the remote emits. The unit does not need the
+        event bits -- measured 2026-08-19 -- so every caller could stop passing
+        one. They are kept because the remote is the specification and matching
+        it costs nothing, not because anything depends on them.
 
         Every bit but the display unit is an event, ``TIMER_UI`` included, so
         each is passed in by the setter that caused it rather than derived from

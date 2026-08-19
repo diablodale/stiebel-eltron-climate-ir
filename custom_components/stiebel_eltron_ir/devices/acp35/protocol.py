@@ -163,9 +163,11 @@ class Acp35Mode(IntEnum):
 class Acp35Fan(IntEnum):
     """Fan speed, held in the high nibble of b6.
 
-    AUTO is inferred from the nibble's width and has never been observed: the
-    remote's fan button only cycles high -> medium -> low. Do not offer it to
-    users until it has been tried against the unit.
+    AUTO is inferred from the nibble's width and is never transmitted. The
+    remote's fan button only cycles high -> medium -> low, and the appliance's
+    own panel has the same three speeds, so there is no fourth speed to select
+    and nothing for this value to mean. It stays because the nibble can hold it
+    and a received frame must decode; `fan_modes` does not offer it.
     """
 
     AUTO = 0
@@ -187,8 +189,10 @@ class Acp35Flag(IntFlag):
     inside the timer display changes the hours without setting it. It marks an
     up/down press that moved the setpoint.
 
-    Whether the unit actually requires the event bits, or acts on b1/b2/b3/b6
-    regardless, is untested. Until that is known, reproduce what the remote sends.
+    The unit does not require them: measured 2026-08-19, the same setpoint change
+    was acted on with TEMP_CHANGED set and cleared. This could be reduced to
+    CELSIUS alone. It is not, because the remote is the specification and
+    reproducing it costs nothing -- the simplification is available, not needed.
     """
 
     NONE = 0
@@ -228,10 +232,11 @@ def effective_fan(mode: Acp35Mode, fan: Acp35Fan) -> Acp35Fan:
     not move it while dry is selected. A frame pairing dry with medium or high is
     therefore one the remote is incapable of emitting.
 
-    Whether the *unit* would accept such a frame is untested, so this mirrors the
-    remote rather than assuming the restriction is only in the handset. Callers
-    keep the user's chosen speed in their own state and pass it here on the way
-    out, so leaving dry restores it rather than silently flattening it to low.
+    Whether the *unit* would accept such a frame was never asked and will not be:
+    the remote is the specification, so we do not send one and its behaviour is
+    not ours to discover. Callers keep the user's chosen speed in their own state
+    and pass it here on the way out, so leaving dry restores it rather than
+    silently flattening it to low.
     """
     return Acp35Fan.LOW if mode is Acp35Mode.DRY else fan
 

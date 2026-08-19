@@ -246,7 +246,9 @@ which direction the pending timer will switch the unit — see
 
 Selecting dry forces the fan to low, and the fan button will not move it while
 dry is selected, so no frame the remote can emit pairs dry with medium or high.
-Whether the *unit* would accept one is untested.
+Whether the *unit* would accept one was never asked and will not be: the remote is
+the specification, so no such frame is sent and the appliance's response to one is
+not ours to discover.
 
 #### Fan speed per mode
 
@@ -276,8 +278,9 @@ not have, and whatever the user picks then appears at the next power-on.
 
 Fan `0` and the °C value `16` (a `b1` nibble of `0`) are both representable but
 are never emitted. The fan button was cycled through a full lap and a repeat and
-produces only high → medium → low; the temperature range starts at 17 °C. Whether
-the *unit* would accept fan `0` as an auto speed is a separate, untested question.
+produces only high → medium → low; the temperature range starts at 17 °C. Fan `0`
+is not a fourth speed the appliance has: its own panel offers the same three, so
+there is nothing for the value to select and it is never transmitted.
 
 ### b7 — one state bit, the rest per-press event bits
 
@@ -315,9 +318,11 @@ has seven buttons — timer, °C/°F, up, down, fan, mode, power — and every o
 been captured. No press exists that could set them. The same argument covers `b4`,
 `b5`, and `b1` bits 2 and 0.
 
-Whether the unit *requires* the event bits, or acts on `b1`/`b2`/`b3`/`b6`
-regardless, is untested. Until that is known the encoder reproduces what the
-remote sends, byte for byte.
+The unit does not *require* the event bits: measured against the appliance on
+2026-08-19, the same setpoint change was acted on with `TEMP_CHANGED` set and with
+it cleared. `b7` could be reduced to the display-unit bit. The encoder reproduces
+what the remote sends anyway, byte for byte, because the remote is the
+specification and mirroring it costs nothing.
 
 ### Temperature
 
@@ -1289,9 +1294,10 @@ Low      55 62 00 0D 00 00 11 80 55
                            3 = high, 2 = medium, 1 = low
 ```
 
-`0` is representable but the button never produces it, so a possible "auto" fan
-is untested. The low nibble stays `1` (cool) throughout, and `b7` stays `0x80` —
-a fan press sets no event bit.
+`0` is representable but the button never produces it, and the appliance's own
+panel has the same three speeds, so there is no "auto" fan to select. The low
+nibble stays `1` (cool) throughout, and `b7` stays `0x80` — a fan press sets no
+event bit.
 
 High -> Medium
 
@@ -1338,8 +1344,8 @@ Auto     55 62 00 0D 00 00 30 80 74
 
 **Entering dry mode drops the fan to low** — `b6` goes `0x33` → `0x12`, changing
 both nibbles at once. Leaving dry for auto restores it to high (`0x30`). Whether
-the unit would accept a non-low fan in dry mode, or whether the remote is merely
-being helpful, is untested.
+the unit would accept a non-low fan in dry mode is not asked here: the remote
+cannot emit one, so neither do we.
 
 Cool -> Fan
 
