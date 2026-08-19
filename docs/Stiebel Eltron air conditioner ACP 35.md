@@ -124,8 +124,23 @@ Every transmission begins with the same four Pronto header words,
 `REFERENCE_FREQUENCY / 38000` back out, so `006D` appears in every capture from
 every device regardless of the actual carrier. Converting it back gives
 38028.9 Hz, which is that constant round-tripped through a four-digit hex code,
-not a measurement. **Treat the carrier as 38 kHz assumed, not measured.** If the
-unit ever refuses a transmission, the carrier is one of the things to vary.
+not a measurement. The "38029 Hz" the original analysis recorded is the same
+number by the same route, and the script that validated it against
+`37800 < f < 38200` was checking that constant against itself.
+
+**The carrier is 38 kHz. Measured against the appliance 2026-08-19**, after
+being assumed for the life of this document. The same command was transmitted at
+carriers from 33 to 44 kHz in 1 kHz steps, each carrying its own setpoint so the
+panel names the last one acted on; the unit answered across **37–39 kHz** and
+nothing outside it, twice ascending and twice descending with identical results.
+The midpoint of those edges puts its receiver's centre at **38 kHz**.
+
+Two things that measurement is not. The band's *width* is a property of where
+the emitter sat — attenuation narrows it symmetrically without moving its middle,
+which is what makes the centre trustworthy and the width not. And it is not the
+remote's carrier: every receiver available here demodulates, so what the
+TZ20160122 transmits cannot be observed at all. What is established is the
+frequency the appliance responds to best, which is what a transmitter needs.
 
 Buttons were never held down during capture, so no repeat sequence was recorded.
 Holding the up/down button does change the remote's own display, but it transmits

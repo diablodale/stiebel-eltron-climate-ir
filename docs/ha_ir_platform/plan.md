@@ -110,11 +110,13 @@ is recorded as available, not taken.
 Pulse-distance, MSB first, `b0` first, no repeat sequence, 74 pairs = header + 72 bit
 pairs + trailer.
 
-**Carrier: use 38000 Hz.** The captures contain *no* frequency information —
-`ProntoProtocol::decode()` hardcodes `uint16_t frequency = 38000U`, so the `006D` in every
-capture is just `REFERENCE_FREQUENCY / 38000` written back out. The "38028.9 Hz" in the
-current doc is that constant round-tripped through 4-digit hex, not a measurement. Keep it
-a named module constant so it is trivially tunable if the unit turns out to be fussy.
+**Carrier: 38000 Hz, and since 2026-08-19 measured rather than assumed.** The captures
+contain *no* frequency information — `ProntoProtocol::decode()` hardcodes `uint16_t
+frequency = 38000U`, so the `006D` in every capture is just `REFERENCE_FREQUENCY / 38000`
+written back out, and the "38028.9 Hz" of the original analysis is that constant
+round-tripped through 4-digit hex. Sweeping it at the appliance settled it: the unit
+answers across 37–39 kHz and nowhere else, centred on 38 kHz. It stays a named module
+constant, which is what made the sweep possible.
 
 Timings below are averaged over all 39 captures using ESPHome's actual integer timebase
 (`to_timebase_(38000) = 1000000 / 38000 = 26 µs`, not 26.296) with the ±20 µs
@@ -169,7 +171,7 @@ interaction) also needs the unit to respond, not a capture, so it folds into
 
 - Replace *IR protocol analysis* → *Mode* with the corrected 72-bit / 9-byte spec, the
   `b7` state-vs-event table, and the physical-layer table above.
-- Correct the carrier claim: 38 kHz assumed, not measured.
+- Correct the carrier claim: 38 kHz assumed, not measured. **Measured 2026-08-19.**
 - Keep every raw capture block verbatim — they are the regression fixtures.
 - Add an appendix **"Superseded 69-bit interpretation"** recording the old table, the two
   analyzer bugs, and the `(data.size() + 1) / 2` rounding that explains `151 != 152`, so
@@ -310,7 +312,7 @@ constants, `get_raw_timings()`, `from_raw_timings()` classmethod, `_is_close` /
 field, a state byte list, checksum appended last, validation in `__init__`):
 
 ```python
-CARRIER_HZ  = 38000    # not measured; ESPHome hardcodes 38 kHz when dumping Pronto
+CARRIER_HZ  = 38000    # measured against the appliance 2026-08-19; it answers 37-39 kHz
 HEADER_MARK = 5100     # verified against the appliance 2026-08-18
 HEADER_SPACE, BIT_MARK, ZERO_SPACE, ONE_SPACE = 5100, 576, 481, 1928
 
@@ -828,6 +830,9 @@ identifies the winner instead of five separate confirmations.
 | `tests/hardware/test_behaviour.py` | `hardware, manual` | 8, 11, 12, 13, 14, 15 | One parametrised case per question, each sending a frame and `confirm`ing what the unit did. Answers get folded back into the doc and the encoder |
 | `tests/hardware/test_frame_timing.py` | `hardware, manual` | 9 | Repeats one command at decreasing separations and `confirm`s how many the unit acted on |
 | `tests/hardware/test_loopback.py` | `hardware` | 10 | **Written, and passing.** Fully automatic. A session fixture transmits once and skips everything if nothing comes back. Otherwise each of the 76 distinct corpus frames is re-encoded, sent, and the journalled capture decoded and compared with what the remote produced for that state |
+| `tests/hardware/test_timer.py` | `hardware, manual, disruptive` | 8, timer half | **Written, and answered.** Arms a timer on the remote, then sends one ordinary setpoint change and reads both the panel and the handset |
+| `tests/hardware/test_checksum.py` | `hardware, manual, disruptive` | not numbered | **Written, and answered.** Three deliberately wrong checksums, a valid frame either side as a control. Confirms transmission by comparing durations, since our own decoder is meant to refuse these |
+| `tests/hardware/test_carrier.py` | `hardware, manual, disruptive` | not numbered | **Written, and answered: 38 kHz.** Sweeps the carrier and reads the appliance's band edges off the panel, one glance per pass, after a range check establishes it can hear us at all. A loopback sweep runs between them as the control on the emitter. Took three runs; the first two are recorded below because each was a defect in the test |
 | `tests/hardware/test_receiver_sync.py` | `hardware, manual` | — | Not a question: end-to-end proof of Phase 5. Skips unless the device exposes a receiver entity, prompts for a press on the physical remote, asserts the climate entity followed. A companion case clears the receiver and asserts climate + timer still work |
 
 Questions 1–6 needed no module here: they were capture exercises, run through
@@ -1220,6 +1225,172 @@ not the same as the frame arriving correctly — the receiver sits beside the em
 So a failure elsewhere narrows to *the appliance did not act on a frame that left
 correctly*, which still includes everything that happens in the air between them.
 Only emitter placement rules that half out, and no test can.
+
+### What carrier does the appliance hear best? Answered 2026-08-19: 38 kHz
+
+**The ACP 35 answers across 37–39 kHz and is centred on 38 kHz**, which is what
+`CARRIER_HZ` has held since it was a guess. Two rounds, each ascending and
+descending, produced identical edges:
+
+| reading | panel | what it names |
+| ------- | ----- | ------------- |
+| range check at 38 kHz | 24 °C | the parking value — the appliance was listening |
+| ascending, round 1 | 22 °C | **39 kHz**, the highest carrier acted on |
+| ascending, round 2 | 22 °C | **39 kHz** |
+| descending, round 1 | 21 °C | **37 kHz**, the lowest carrier acted on |
+| descending, round 2 | 21 °C | **37 kHz** |
+
+Every carrier from 33 to 44 kHz was transmitted three times and confirmed on the
+air, and the loopback decoded all twelve, so the edges are the appliance's rather
+than the emitter's. Four independent readings agreeing exactly is also what rules
+out a corrupted frame having drawn one: corruption is random and would not place
+the same wrong edge four times.
+
+**The width belongs to the emitter's position, the centre to the appliance.**
+Attenuation narrows the band symmetrically without moving its middle — that is
+the property the whole method rests on — so 37–39 kHz says the link was marginal,
+not that the appliance is unusually selective.
+
+**It is still not the remote's carrier.** Every receiver available here
+demodulates, so what the TZ20160122 transmits cannot be observed. What is
+established is the frequency the appliance responds to best, which is the one a
+transmitter needs.
+
+The question, the method and the two runs that failed before it worked follow.
+
+`CARRIER_HZ = 38000` is the last physical-layer constant that has never been
+measured, and it is the one that costs range when it is wrong: a receiver module
+is a band-pass detector, so a carrier a few kilohertz off centre arrives
+attenuated at every distance.
+
+**The 2025 figure is not evidence, and it is worth saying why once.** The
+original analysis recorded `38028.866 = 38029 Hz` for every capture, and
+`pronto_analyzer.py` printed *"Frequency: 38028.9 Hz"* and checked it against
+`37800 < f < 38200`. Both come from Pronto header word `006D`, which ESPHome
+writes unconditionally as `REFERENCE_FREQUENCY / 38000`; the check was comparing
+that constant with itself, and consistency across dozens of captures was one
+number reprinted. Nothing in that session held an instrument. See *Appendix: the
+superseded 69-bit interpretation* in the protocol document for the other thing
+the same captures appeared to establish.
+
+**The remote's carrier cannot be measured here at all.** Every receiver in reach
+— the KC868-AG's and the appliance's — demodulates, so the carrier is gone before
+anything downstream sees it. What is measurable is the carrier the *appliance*
+responds to best, which is what sets our range and what `CARRIER_HZ` should hold.
+
+**Method, in `tests/hardware/test_carrier.py`:** transmit the same command at a
+series of carriers and find the two frequencies where the appliance stops acting
+on it. Their midpoint estimates the centre of its passband. Attenuation is the
+reason this works by hand: moving the emitter changes the signal by the same
+factor at every carrier, so distance sets the *width* of the measured band and
+not its middle. The run is self-calibrating — every carrier obeyed means too
+close, none obeyed means too far — and the assertions say which way to move.
+
+Each carrier carries its own setpoint, as in the header-mark bisect, so an
+ascending pass ends on the highest carrier that worked and a descending pass on
+the lowest: one glance at the panel per pass rather than one per carrier. A
+coarse sweep at 3 kHz finds the edges, a 1 kHz pass across each refines it.
+
+Two traps the test guards rather than assumes:
+
+- **The third harmonic.** A 50% square wave carries a strong component at 3f, so
+  a carrier at a third of a receiver's centre is heard by that receiver and reads
+  as a working one. Every sweep starts above 22 kHz, whose third harmonic clears
+  any receiver ever built.
+- **The emitter is in both halves.** A carrier the ESP32 cannot generate fails at
+  the appliance and at our own receiver alike, so a loopback sweep runs too — no
+  human, no panel — and two receivers sharing both edges indicts the transmitter
+  rather than measuring either of them.
+
+What the answer changes: if the centre is more than about a coarse step from
+38 kHz, `CARRIER_HZ` is wrong and every frame this integration sends is off-band.
+If it is not, the constant is confirmed by measurement for the first time and the
+range problem lies entirely in placement and drive.
+
+#### First run, 2026-08-19: no carrier measured, three things established
+
+Run with the emitter deliberately far from the appliance. **The appliance acted
+on nothing at any of the twelve carriers**, and the panel held its own setpoint
+through all four passes, so the run measured placement rather than frequency.
+Every frame was confirmed on the air, including the 38 kHz parking frames.
+
+It was not wasted:
+
+- **The ESP32 really does retune per command.** The demodulated pulse widths our
+  own receiver reports vary systematically with the requested carrier — mean bit
+  mark 641 µs at 22 kHz, 572 µs at 36 kHz, 759 µs at 56 kHz. Had ESPHome ignored
+  `modulation` and transmitted 38 kHz throughout, every sweep would have been one
+  carrier measured 39 times, and nothing in the method would have shown it. That
+  was the largest unstated threat to the whole approach and it is now closed.
+- **The emitter produces the whole range.** All 39 carriers from 22 to 60 kHz
+  came back as frame-length buffers; 37 of them decoded. So an edge the appliance
+  eventually shows is the appliance's.
+- **The loopback cannot find its own band edges, and the test should not ask it
+  to.** It heard every carrier swept, exactly as the loopback note above predicts:
+  it sits centimetres from the LED and its margin swamps the 20–30 dB of
+  out-of-band rejection a receiver module has. The assertion was replaced by the
+  coverage one, which is what the sweep can actually establish.
+
+Two defects in the test, both fixed before the next run:
+
+- **The parking frame proved nothing.** It parked on the appliance's own
+  setpoint, which moves no display, so "the panel shows the baseline" could mean
+  the appliance was listening and rejected every carrier, or that nothing reached
+  it at all. It now parks on a setpoint that is neither the appliance's nor any
+  carrier's, which makes the single reading three-valued.
+- **Nothing failed fast.** Four passes and six minutes went out before the first
+  reading said the appliance was out of range. A range check now sends one frame
+  at 38 kHz and asks one question before any sweep begins, and skips rather than
+  fails: being out of range is a fact about where the emitter was put.
+
+#### Second run, 2026-08-19: the appliance went to auto on frames that all said cool
+
+The emitter was moved in and the range check ran, and did not pass — the panel
+did not move to the setpoint asked for. The sweep never started. What makes the
+run worth recording is what the appliance did instead.
+
+The journal timeline is closed on both ends by frames the physical remote sent,
+which are 147 durations against our 148 and so are unambiguous:
+
+| time | what |
+| ---- | ---- |
+| 03:15:32 | remote sets **cool** medium 23 |
+| 03:28:27–03:28:40 | we send **84 frames, every one carrying cool** — 78 at carriers from 22 to 60 kHz, 3 at 38 kHz, 3 restoring |
+| — | panel read **auto** |
+| 03:29:54 | remote sets cool medium 23 again, by hand |
+
+Nothing else touched the appliance in between. **It acted on a command nothing
+transmitted**, which is the same class of event as question 7's descending pass
+and question 8's far run, and the first instance where every frame sent was
+identical in the field that changed.
+
+**It is one bit.** Cool is mode nibble `1` and auto is `0`, so `b6` went from
+`0x21` to `0x20`. With no checksum verification, a single corrupted bit is a mode
+change the appliance carries out.
+
+**The carrier is not the explanation, and can be ruled out arithmetically.**
+`ZERO_SPACE` and `ONE_SPACE` are 1447 µs apart, and the largest pulse-width shift
+measured anywhere across the 22–60 kHz sweep is under 200 µs. Distortion of that
+size cannot move a space across the boundary. Flipping a bit needs a spurious
+edge inside a space, which is what a weak signal and the ambient infrared floor
+produce — a signal-strength failure, not a frequency one.
+
+Three changes follow, all in place:
+
+- **The range check runs first**, before the loopback sweep. It ran after, so 78
+  frames went at a marginal appliance before anything established it could hear
+  us, which is almost certainly when the mode flipped.
+- **The sweep is narrow: 33–44 kHz in 1 kHz steps**, twelve carriers, no separate
+  refinement stage. Once the range check passes, 38 kHz is known to be inside the
+  appliance's passband, so its centre is within a few kHz and there is no case for
+  putting 24 kHz in front of an appliance that mis-receives what it cannot decode.
+  Resolution improves from 3 kHz to 1 kHz while the frames become less exotic.
+- **The tension is documented rather than resolved.** Attenuation is what brings
+  the band edges into a measurable range, and attenuation is what corrupts frames.
+  No placement gives both. The cover is that each edge is read four times, across
+  two directions and two rounds, and that a disagreement is reported instead of
+  averaged; a corrupted frame landing on another setpoint in the same pass and
+  arriving last remains a hole the method cannot close.
 
 ### Procedures for questions 1–6
 

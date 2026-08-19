@@ -47,6 +47,12 @@ from infrared_protocols.commands import Command
 # compensation removed. The captures carry no frequency information at all:
 # ESPHome's ProntoProtocol::decode() hardcodes 38000 Hz, so the "38028.9 Hz" of
 # earlier analysis was that constant round-tripped through a 4-digit hex code.
+#
+# **Measured against the appliance 2026-08-19**, having been assumed until then.
+# Sweeping the carrier at 1 kHz steps and reading which frames the unit acted on,
+# it answered across 37-39 kHz and no further, twice in each direction, putting
+# its receiver's centre at 38 kHz. The width of that band belongs to where the
+# emitter sat; the centre belongs to the appliance. See test_carrier.py.
 CARRIER_HZ = 38000
 
 # Verified against the appliance 2026-08-18. No capture could settle it: every
