@@ -409,6 +409,17 @@ seeded with a magic `0x55`, which is the same arithmetic seen through the
 misaligned frame: what it called a seed is simply `b0`, a constant byte that the
 old reading had pushed outside the message.
 
+**The appliance does not check it. Measured 2026-08-19.** Frames carrying three
+wrong checksums — one over, all bits inverted, and zero — were each acted on, with
+a valid frame either side as a control. The byte is transmitted and not verified,
+at least not in any way that rejects a wrong value. Two things follow:
+
+- **A frame damaged in flight is obeyed rather than discarded**, which is why the
+  emitter's placement decides whether the appliance receives commands nobody sent.
+- **A decoder should still verify it.** For anything reading these frames off the
+  air the checksum is the only thing separating a frame from ambient infrared that
+  happened to clock in, which is a problem the appliance does not have.
+
 ### Tooling
 
 `tools/acp35_cli.py` decodes captures; `tools/pronto.py` converts Pronto codes to

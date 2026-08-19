@@ -71,9 +71,13 @@ commands, six were not obeyed, and the appliance twice acted on something that w
 never sent, once switching from cool to fan. Moved close, all sixteen were obeyed.
 
 The frames themselves were confirmed correct on the air in both runs, so nothing
-in Home Assistant or the emitter can detect this. A frame corrupted in flight can
-still decode as a valid, different command, which means the appliance does not
-appear to verify the checksum the protocol carries.
+in Home Assistant or the emitter can detect this — what leaves the LED is not what
+arrives three metres away, and only the appliance knows the difference.
+
+It has no defence either: **the ACP 35 does not verify the checksum its protocol
+carries.** Frames with three different deliberately wrong checksums were all acted
+on, with valid frames either side as controls. Whatever reaches it is what it
+does, so a frame damaged in flight is obeyed rather than discarded.
 
 ## Status
 

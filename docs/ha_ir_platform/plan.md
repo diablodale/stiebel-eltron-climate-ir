@@ -1137,10 +1137,37 @@ failures were not simple silence:
   `55 62 00 0D 00 00 30 80 74`, auto/high/22 °C, matching a corpus capture — and
   the unit did not obey it.
 
-So marginal reception does not merely drop commands, it produces **wrong ones**: a
-mangled frame can still parse into a valid command that was never sent. The ACP 35
-therefore does not appear to verify the checksum, since a corrupted frame should
-have been rejected outright.
+So marginal reception does not merely drop commands, it produces **wrong ones**.
+
+### The ACP 35 does not verify its checksum. Measured 2026-08-19
+
+An earlier draft of this section concluded that from the wrong-command
+observation alone, which did not support it: corruption can land on a valid
+checksum, the bit sampling can shift, and an air conditioner at its setpoint may
+drop its own fan unprompted. So `test_checksum.py` transmitted deliberately wrong
+ones instead of inferring, with a valid frame either side as a control:
+
+| frame | checksum | panel |
+| ----- | -------- | ----- |
+| `55 82 00 10 00 00 21 C0 C8` | valid | obeyed |
+| `55 92 00 12 00 00 21 C0 DB` | wrong, should be `DA` | **obeyed** |
+| `55 A2 00 14 00 00 21 C0 13` | wrong, should be `EC` | **obeyed** |
+| `55 B2 00 16 00 00 21 C0 00` | wrong, should be `FE` | **obeyed** |
+| `55 C2 00 17 00 00 21 C0 0F` | valid | obeyed |
+
+Three corruptions differing in different bit positions, every one acted on, both
+controls working. The byte is transmitted and not checked — at least not in any
+way that rejects a wrong value.
+
+**This is why emitter placement matters beyond losing frames.** The appliance has
+no defence against a frame damaged in flight: whatever clocks in is what it acts
+on. That does not prove the far-emitter wrong commands were corrupted frames, but
+it removes the objection that a bad checksum would have stopped them.
+
+**It changes nothing in the integration.** We always send a correct checksum
+because the remote does, and our own decoder goes on rejecting bad ones — that is
+how `from_raw_timings` tells a frame from noise, and the appliance's laxity is no
+reason to copy it.
 
 **The loopback cannot detect any of this, and never could.** The receiver sits
 beside the emitter, not beside the appliance, so a clean 148-duration echo proves

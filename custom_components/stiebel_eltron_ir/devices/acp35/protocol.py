@@ -26,6 +26,12 @@ Frame (pulse-distance, MSB first, byte 0 first)::
 Verified against all 39 captures in the project's protocol document: every one
 decodes to nine bytes with a valid checksum and re-encodes bit-identically.
 
+**The appliance does not check ``ck``.** Measured 2026-08-19: frames carrying
+three different wrong checksums were all acted on, with valid frames either side
+as controls. This decoder still rejects them, and should -- the checksum is how
+`from_raw_timings` tells a frame from ambient noise, which is a problem the
+appliance does not have to solve.
+
 This module deliberately imports nothing from ``homeassistant`` so it can be
 contributed to ``infrared-protocols`` unchanged.
 """
