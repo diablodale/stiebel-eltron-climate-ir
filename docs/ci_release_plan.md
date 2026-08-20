@@ -92,10 +92,12 @@ filename only, not on `docs/`, so moving the file does not silently disarm it.
    `diablodale/stiebel-eltron-climate-ir`, **no** auto-created README, `.gitignore`
    or LICENSE, since all three arrive from here. While there:
    - set the repository **description** (HACS's `description` check reads it),
-   - add **topics**: `home-assistant`, `hacs`, `custom-component`, `infrared`,
-     `stiebel-eltron`, `climate`, `acp35` (HACS's `topics` check),
    - confirm **Issues** are enabled (HACS's `issues` check; `manifest.json` already
      points `issue_tracker` there).
+
+   **Amendment, found in practice:** topics cannot be added to an empty repository —
+   GitHub offers no topic field until the repository has content. They move to phase
+   1, immediately after the first push.
 3. Wire the remote, but **do not push yet**:
 
    ```bash
@@ -105,9 +107,10 @@ filename only, not on `docs/`, so moving the file does not silently disarm it.
 **Nothing leaves this machine until the license is in place.** Private, and unpushed,
 means no licence-less code is published even briefly. The first push is the last step
 of phase 1, once `LICENSE` is committed and therefore present at `HEAD` of the very
-first push; going public follows immediately after. Everything later — CI runs,
-badges, HACS validation — needs the repository to exist, which is why it is created
-now rather than at the end.
+first push. The repository then **stays private through phase 5** and goes public at
+the start of phase 6, the first point at which anything depends on it. It is created
+now, rather than at the end, because everything later — CI runs, the badges branch,
+HACS validation — needs it to exist.
 
 ## Phase 1 — License and package metadata
 
@@ -141,29 +144,48 @@ now rather than at the end.
    git push -u origin main
    ```
 
-5. **Dale changes the repository from private to public.** GitHub → the repository →
-   **Settings** → **General** → **Danger Zone** → **Change repository visibility** →
-   **Make public**, and confirm by typing the repository name.
+   Then add the **topics** phase 0 could not: `home-assistant`, `hacs`,
+   `custom-component`, `infrared`, `stiebel-eltron`, `climate`, `acp35`. The field
+   appears once the repository has content, and HACS's `topics` check needs them.
 
-   This is a manual step and a deliberate gate: it happens only after step 4 has put
-   the Apache-2.0 license in the pushed history, and it is what every later phase
-   depends on — Actions on a public repo, the `badges` branch shields.io reads, the
-   HACS action's checks, and installation by anyone but Dale.
+5. **Dale requires signed commits on `main`.** GitHub → Settings → Rules → Rulesets →
+   New branch ruleset, target **Default branch**, enable **Require signed commits**,
+   status Active.
 
-6. **Dale requires signed commits — on `main` only.** GitHub → Settings → Rules →
-   Rulesets → New branch ruleset, target **Default branch**, enable **Require signed
-   commits**, status Active.
+   This works while the repository is still private because the account is **GitHub
+   Pro**: rulesets are available "in public repositories with GitHub Free … and in
+   public and private repositories with GitHub Pro, GitHub Team, and GitHub
+   Enterprise Cloud". On Free it would have had to wait for phase 6; it does not, so
+   server-side enforcement starts with the first push rather than five phases later.
 
    **Target `main`, not "All branches".** Phase 5's `update-badges` job pushes
    `chore: update test badges` to the orphan `badges` branch as
    `github-actions[bot]` over HTTPS, and those commits are unsigned — a ruleset
-   covering all branches rejects them and the badges silently stop updating. The
-   `badges` branch holds two JSON files written by CI and no source, so leaving it
-   outside the rule costs nothing.
+   covering all branches rejects them and the badges silently stop updating. That
+   branch holds two CI-written JSON files and no source, so leaving it outside the
+   rule costs nothing.
 
    Nothing is needed on this machine: `commit.gpgsign` and `tag.gpgsign` are already
-   `true` and the existing commits carry `gpgsig` headers. The ruleset makes that a
+   `true` and every commit carries a `gpgsig` header. The ruleset makes that a
    property of the repository rather than of one working copy.
+
+**Amendment: going public moves to phase 6.** It was written here; it is deferred to
+the last moment at which something actually depends on it, so the repository stays
+private as long as it can. The signing ruleset above is *not* deferred with it —
+GitHub Pro allows rulesets on private repositories, so the two are independent.
+
+- Phases 2–5 work private. Actions run well inside the plan's monthly minutes and
+  these workflows take one to two; hassfest is a container over the checked-out
+  workspace; `EnricoMi/publish-unit-test-result-action` writes checks and comments
+  in-repo; `hacs/action` authenticates with `${{ github.token }}` rather than reading
+  the repository anonymously.
+- **Badges are the first hard dependency**, in phase 6. shields.io fetches
+  `raw.githubusercontent.com` from its own servers with no credentials and gets a
+  404 on private content — GitHub returns 404 rather than 403 so as not to reveal
+  that a repository exists — and GitHub's own workflow-status SVGs are equally
+  unavailable anonymously.
+- One thing to watch in phase 5: if `hacs/action` turns out to need anonymous read
+  after all, that is where it surfaces, and the flip moves up to meet it.
 
 **Exercise:** `uv sync` accepts the PEP 639 metadata; after the push, GitHub's
 repository sidebar shows **Apache-2.0** — its licence detector reading the file is
@@ -709,7 +731,23 @@ see the test-results check and comment appear; merge to main and confirm the `ba
 branch is created with both JSON files; run `hassfest` and `hacs` via
 `workflow_dispatch` rather than waiting for the cron.
 
-## Phase 6 — Community files and README badges
+## Phase 6 — Going public, community files and README badges
+
+One manual step by Dale opens this phase, because the badges added below are the
+first thing that cannot work on a private repository:
+
+1. **Change the repository from private to public.** GitHub → the repository →
+   **Settings** → **General** → **Danger Zone** → **Change repository visibility** →
+   **Make public**, confirming by typing the repository name. Everything since phase
+   1 has run privately; this is the point where shields.io and GitHub's badge SVGs
+   need anonymous read, and where anyone but Dale can install the integration.
+   Allow a few minutes before judging a broken badge — GitHub caches raw content for
+   about five minutes, so a freshly public file can 404 briefly.
+
+The signed-commits ruleset is already in place from phase 1; GitHub Pro allowed it to
+be created while the repository was still private.
+
+Then the files:
 
 - **`CONTRIBUTING.md`**, following the reference's headings with this repo's
   content: Prerequisites (uv, Python 3.14) · Dev setup · Testing (the three pytest
