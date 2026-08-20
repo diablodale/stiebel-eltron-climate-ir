@@ -1,0 +1,10 @@
+# Normalize line endings on check-in. This working tree lives on a Windows volume
+# exposed to WSL2 over 9p and is bind-mounted into the Home Assistant container, so
+# the same file is edited by Windows tools and read by Linux ones. Storing LF in the
+# repository is what keeps a Windows editor from committing CRLF that the container
+# then has to cope with.
+* text=auto eol=lf
+
+# Brand assets, exempt from every text rule above. Without this, a PNG that happens
+# to contain byte sequences git reads as text could be mangled by normalization.
+*.png binary

@@ -169,6 +169,16 @@ HACS validation — needs it to exist.
    `true` and every commit carries a `gpgsig` header. The ruleset makes that a
    property of the repository rather than of one working copy.
 
+   **Leave the two rules the UI pre-selects checked** — *Restrict deletions* and
+   *Block force pushes*. Nothing here deletes `main` or rewrites its history: `cz
+   bump` makes an ordinary commit and tag, and the badges job pushes to a branch this
+   ruleset does not target. The one consequence, for a sole committer working
+   directly on `main`, is that amending an already-pushed commit and force-pushing is
+   refused. Do not answer that with a bypass entry: **a bypass list applies to the
+   whole ruleset**, so admitting force pushes would admit unsigned commits too. Set
+   the ruleset to Disabled for the rewrite and re-enable it, or split it in two —
+   signed commits with no bypass, deletions and force pushes with one.
+
 **Amendment: going public moves to phase 6.** It was written here; it is deferred to
 the last moment at which something actually depends on it, so the repository stays
 private as long as it can. The signing ruleset above is *not* deferred with it —

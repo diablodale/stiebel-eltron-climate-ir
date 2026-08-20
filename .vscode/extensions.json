@@ -1,0 +1,9 @@
+{
+  // Extensions that make this repo's conventions visible in the editor rather than
+  // only at commit time.
+  "recommendations": [
+    "ms-python.python",
+    "charliermarsh.ruff",
+    "editorconfig.editorconfig"
+  ]
+}
