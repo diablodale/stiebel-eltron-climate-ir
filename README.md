@@ -17,6 +17,61 @@ not overlap and can be installed together.
 | ----- | ----------------- | ------ |
 | ACP 35 air conditioner | [Stiebel Eltron air conditioner ACP 35.md](docs/Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md) | TZ20160122 |
 
+## Requirements
+
+- **Home Assistant 2026.8 or later.** The infrared entity platform arrived in
+  2026.6; 2026.8 is the floor this integration is developed and tested against.
+- **An infrared emitter entity**, provided by some other integration — anything that
+  offers an `infrared` entity with the emitter device class. The reference hardware
+  is a [KC868-AG](https://www.kincony.com/) running ESPHome 2026.7.4, which exposes
+  its `ir_rf_proxy` instances to Home Assistant as infrared entities.
+- **An infrared receiver entity, optionally.** With one, Home Assistant follows the
+  physical remote; without one the integration is complete and simply cannot notice
+  the handset being used.
+
+## Installation
+
+### HACS
+
+1. HACS → the three-dot menu, top right → **Custom repositories**
+2. Add `https://github.com/diablodale/stiebel-eltron-climate-ir`, type
+   **Integration**, then **ADD**
+3. Install the repository from HACS, then restart Home Assistant
+
+### Manually
+
+Copy `custom_components/stiebel_eltron_ir/` from a release into your Home Assistant
+configuration directory, so that this path exists:
+
+```text
+<config>/custom_components/stiebel_eltron_ir/manifest.json
+```
+
+Restart Home Assistant afterwards. Nothing else is copied — `tests/`, `tools/` and
+`docs/` are for developing the integration, not for running it.
+
+## Configuration
+
+Settings → Devices & services → **Add integration** → **Stiebel Eltron (infrared)**.
+One form appears, with three fields:
+
+| field | |
+| ----- | - |
+| **Infrared emitter** | Required. The entity to transmit through. Only emitters are offered |
+| **Infrared receiver (optional)** | Leave empty if you have none |
+| **Name** | Defaults to `Stiebel Eltron ACP 35`. It names the device and the entity ids are derived from it |
+
+Then place the emitter, which is not a formality — see
+[Emitter placement matters more than you would expect](#emitter-placement-matters-more-than-you-would-expect)
+before deciding where it goes.
+
+**One entry per emitter and model.** Adding a second entry for the same appliance
+model on the same emitter is refused. The frame carries no device address, so two
+identical appliances hearing one emitter cannot be told apart or driven separately,
+whatever Home Assistant does — a second entry could only send both the same commands.
+Two *different* models sharing one emitter is fine: each decoder rejects the other's
+frames.
+
 ## What is here
 
 | path | contents |
@@ -26,6 +81,7 @@ not overlap and can be installed together.
 | [docs/](docs/) | one protocol document per model, each with every capture it was derived from |
 | [docs/ha_ir_platform/plan.md](docs/ha_ir_platform/plan.md) | design decisions, open questions, and what the hardware still has to settle |
 | [docs/ha_ir_platform/devcontainer.md](docs/ha_ir_platform/devcontainer.md) | running Home Assistant from source against this repo |
+| [docs/ci_release_plan.md](docs/ci_release_plan.md) | how this repo is licensed, linted, tested in CI, versioned and released, and why each choice was made |
 | [tools/](tools/) | Pronto decoding, and the capture tooling used with real hardware |
 
 ## Entities
