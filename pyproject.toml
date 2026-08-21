@@ -101,7 +101,14 @@ markers = [
 addopts = "-m 'not hardware'"
 
 [tool.commitizen]
-name = "cz_conventional_commits"
+# `cz_customize` rather than `cz_conventional_commits`, because `commit_parser`
+# (what reaches the changelog) and `bump_map` (what moves the version) are class
+# attributes of the built-in plugin and are read off it directly -- neither is a
+# top-level setting. `[tool.commitizen.customize]` below restates the built-in
+# plugin with `refactor` and `perf` dropped from both, so those commits neither
+# bump nor appear. Dropping them from only one of the two would leave a release
+# heading with nothing under it.
+name = "cz_customize"
 # Writes the version into pyproject.toml *and* uv.lock's entry for this package,
 # which `pep621` does not. Without it, `uv sync --locked` in CI fails after a bump.
 version_provider = "uv"
@@ -116,6 +123,130 @@ annotated_tag = true
 # Signs the tag. The bump *commit* is signed by `commit.gpgsign`, since commitizen
 # runs a plain `git commit` and leaves that decision to git config.
 gpg_sign = true
+
+# Conventional Commits, restated. Every value here is the built-in plugin's own,
+# verbatim, except where a comment says otherwise. Regexes are TOML literal
+# strings, so a backslash is a backslash.
+[tool.commitizen.customize]
+# Captures the type, with any scope and any `!`, for `bump_map` to match against.
+bump_pattern = '^((BREAKING[\-\ ]CHANGE|\w+)(\(.+\))?!?):'
+# Decides which commits reach the changelog and under which heading. A type not
+# named here is dropped: that is how `docs`, `test`, `build`, `chore` and now
+# `refactor` and `perf` stay out. The trailing `\w+!` alternative still catches a
+# breaking commit of any type -- `refactor!:` included -- and files it under no
+# heading, which is the built-in behaviour for `docs!:` and the rest.
+commit_parser = '^((?P<change_type>feat|fix|BREAKING CHANGE)(?:\((?P<scope>[^()\r\n]*)\)|\()?(?P<breaking>!)?|\w+!):\s(?P<message>.*)?'
+# Only gates which commits are considered; `commit_parser` does the selecting.
+changelog_pattern = '^((BREAKING[\-\ ]CHANGE|\w+)(\(.+\))?!?):'
+change_type_order = ["BREAKING CHANGE", "Feat", "Fix"]
+example = """fix: correct minor typos in code
+
+see the issue for details on the typos fixed
+
+closes issue #12"""
+schema = """<type>(<scope>): <subject>
+<BLANK LINE>
+<body>
+<BLANK LINE>
+(BREAKING CHANGE: )<footer>"""
+# What `cz check` enforces in the commit-msg hook. Unchanged: `refactor` and
+# `perf` are still valid types to write, they just carry no release consequence.
+schema_pattern = '(?s)(build|bump|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(\S+\))?!?: ([^\n\r]+)((\n\n.*)|(\s*))?$'
+info = """Conventional Commits, with two local changes.
+
+Types that move the version and appear in CHANGELOG.md:
+  feat            minor
+  fix             patch
+  <any>! / BREAKING CHANGE
+                  minor while major_version_zero is set, otherwise major
+
+Types accepted but with no release consequence:
+  refactor perf docs style test build ci chore revert
+
+Format:
+  <type>(<scope>): <subject>
+
+  <body>
+
+  <footer>"""
+# The built-in `message()` is Python; this is its Jinja2 equivalent. It assumes
+# `breaking_change_exclamation_in_title` is unset (the default), so a breaking
+# change goes to the footer rather than putting `!` in the title.
+message_template = """\
+{{prefix}}{% if scope %}({{scope}}){% endif %}: {{subject}}\
+{% if body %}\n\n{{body}}{% endif %}\
+{% if is_breaking_change %}\n\nBREAKING CHANGE: {{footer}}\
+{% elif footer %}\n\n{{footer}}{% endif %}"""
+
+# `^.+!$` first, so a breaking commit of any type outranks its own type's rule.
+# `refactor` and `perf` are the two entries the built-in map has that these do
+# not; without that removal a refactor-only span would still cut a release.
+[tool.commitizen.customize.bump_map]
+'^.+!$' = "MAJOR"
+'^BREAKING[\-\ ]CHANGE' = "MAJOR"
+'^feat' = "MINOR"
+'^fix' = "PATCH"
+
+# The map actually in force, since `major_version_zero` is set above. Stated in
+# full rather than left to commitizen's derive-from-bump_map fallback, so the two
+# are read side by side. Keep them in step.
+[tool.commitizen.customize.bump_map_major_version_zero]
+'^.+!$' = "MINOR"
+'^BREAKING[\-\ ]CHANGE' = "MINOR"
+'^feat' = "MINOR"
+'^fix' = "PATCH"
+
+# Changelog headings. No `refactor`/`perf` rows, matching `commit_parser`.
+[tool.commitizen.customize.change_type_map]
+feat = "Feat"
+fix = "Fix"
+
+# `cz commit` only. The built-in plugin attaches Python filters to the scope,
+# subject and body answers -- hyphenating a multi-word scope, requiring a subject
+# and stripping its trailing period, rewrapping the body. TOML cannot carry a
+# callable, so those are lost here; `cz check` in the commit-msg hook is what
+# still enforces the format, whichever way the message was written.
+[[tool.commitizen.customize.questions]]
+type = "list"
+name = "prefix"
+message = "Select the type of change you are committing"
+choices = [
+  { value = "fix", name = "fix: A bug fix. Correlates with PATCH in SemVer", key = "x" },
+  { value = "feat", name = "feat: A new feature. Correlates with MINOR in SemVer", key = "f" },
+  { value = "docs", name = "docs: Documentation only changes", key = "d" },
+  { value = "style", name = "style: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)", key = "s" },
+  { value = "refactor", name = "refactor: A code change that neither fixes a bug nor adds a feature", key = "r" },
+  { value = "perf", name = "perf: A code change that improves performance", key = "p" },
+  { value = "test", name = "test: Adding missing or correcting existing tests", key = "t" },
+  { value = "build", name = "build: Changes that affect the build system or external dependencies (example scopes: pip, docker, npm)", key = "b" },
+  { value = "ci", name = "ci: Changes to CI configuration files and scripts (example scopes: GitLabCI)", key = "c" },
+]
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "scope"
+message = "What is the scope of this change? (class or file name): (press [enter] to skip)\n"
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "subject"
+message = "Write a short and imperative summary of the code changes: (lower case and no period)\n"
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "body"
+message = "Provide additional contextual information about the code changes: (press [enter] to skip)\n"
+
+[[tool.commitizen.customize.questions]]
+type = "confirm"
+name = "is_breaking_change"
+message = "Is this a BREAKING CHANGE? Correlates with MAJOR in SemVer"
+default = false
+
+[[tool.commitizen.customize.questions]]
+type = "input"
+name = "footer"
+message = "Footer. Information about Breaking Changes and reference issues that this commit closes: (press [enter] to skip)\n"
 
 [tool.coverage.run]
 branch = true
