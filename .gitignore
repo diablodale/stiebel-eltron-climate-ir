@@ -1,8 +1,18 @@
-.venv/
+# No trailing slash: on a repo living under /mnt/c this is usually a symlink to a
+# venv on ext4, not a directory, and `.venv/` would not match a symlink.
+.venv
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Coverage and test reports, written by tools/coverage.sh and by CI, which uploads
+# them as artifacts. `.coverage*` rather than `.coverage`, because each suite writes
+# its own data file -- .coverage.unit and .coverage.integration -- before they are
+# merged into .coverage.
+coverage/
+.coverage*
+test-results/
 
 # Home Assistant URL and long-lived token for the hardware session.
 .env

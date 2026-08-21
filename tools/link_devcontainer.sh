@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Create the symlinks the Home Assistant devcontainer needs to load this repo.
 #
-# ha-core gitignores config/, and its test tree has to contain the integration
-# tests for them to reach the `hass` fixture, so both trees reference sources
-# that live here. Run inside the container, where these paths resolve:
+# ha-core gitignores config/, so the components Home Assistant loads at runtime are
+# referenced from here instead. Run inside the container, where these paths resolve:
 #
 #     npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
 #       /workspaces/acp35/tools/link_devcontainer.sh
@@ -25,7 +24,9 @@ while [ $# -gt 0 ]; do
         --receiver=*) RECEIVER="${1#*=}"; shift ;;
         --emitter) EMITTER="${2:-}"; shift 2 ;;
         --emitter=*) EMITTER="${1#*=}"; shift ;;
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # Prints the header comment, however long it happens to be: a fixed line
+        # range silently starts leaking code the first time the header is edited.
+        -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -63,18 +64,9 @@ link "$ACP35_DIR/tests/custom_components/fake_ir" \
 link "$ACP35_DIR/tests/custom_components/acp35_bench" \
      "$HA_CORE_DIR/config/custom_components/acp35_bench"
 
-echo "Integration tests, run from ha-core's test tree:"
-link "$ACP35_DIR/tests/integration" \
-     "$HA_CORE_DIR/tests/components/stiebel_eltron_ir"
-
-# enable_custom_integrations looks here, and importing the integration under any
-# other package name creates a second copy of the enums, so identity checks like
-# `mode is Acp35Mode.COOL` fail with no visible cause.
-echo "Custom components the test fixtures import:"
-link "$ACP35_DIR/custom_components/stiebel_eltron_ir" \
-     "$HA_CORE_DIR/tests/testing_config/custom_components/stiebel_eltron_ir"
-link "$ACP35_DIR/tests/custom_components/fake_ir" \
-     "$HA_CORE_DIR/tests/testing_config/custom_components/fake_ir"
+# Nothing is linked into ha-core's test tree any more. The integration tests run on
+# the host, against pytest-homeassistant-custom-component, in the same `uv run
+# pytest` as the unit tests -- see docs/ha_ir_platform/devcontainer.md.
 
 CONFIG="$HA_CORE_DIR/config/configuration.yaml"
 

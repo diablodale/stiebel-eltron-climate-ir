@@ -236,7 +236,7 @@ class TestSchemaVersions:
         downgraded, or restored an old backup, would be reset and would recover
         nothing by upgrading again.
         """
-        from tests.common import MockConfigEntry
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
 
         config_entry = MockConfigEntry(
             domain=DOMAIN,
@@ -263,7 +263,7 @@ class TestSchemaVersions:
         Silently defaulting would destroy state a correct build could have read,
         and hide the missing conversion at the same time.
         """
-        from tests.common import MockConfigEntry
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
 
         config_entry = MockConfigEntry(
             domain=DOMAIN,
@@ -282,7 +282,7 @@ class TestSchemaVersions:
         self, hass: HomeAssistant, emitter: str, send_command: AsyncMock, hass_storage
     ) -> None:
         """Minor bumps are backward compatible by Store's own contract."""
-        from tests.common import MockConfigEntry
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
 
         config_entry = MockConfigEntry(
             domain=DOMAIN,
@@ -310,7 +310,7 @@ class TestARefusedPayload:
         self, hass: HomeAssistant, emitter: str, send_command: AsyncMock, hass_storage
     ) -> None:
         """Raising here would leave the appliance with no entities at all."""
-        from tests.common import MockConfigEntry
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
 
         config_entry = MockConfigEntry(
             domain=DOMAIN,

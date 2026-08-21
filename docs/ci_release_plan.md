@@ -430,10 +430,100 @@ show_missing = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 ```
 
-`source` lists only what the host suite can import: the package root imports
-`homeassistant` and cannot load outside the devcontainer, so including it would
-report 0% for modules this suite is not the measurement of. Integration coverage is
-measured separately, inside the container.
+**Amendment, found in practice — three attempts, the first two wrong.**
+
+1. `source = [".../devices", "tools"]` reported six integration modules at 0%,
+   because they import Home Assistant and the host suite cannot import them.
+2. Omitting those six was worse: it hid the best-tested code in the repository,
+   which the devcontainer suite covers at 97-100%. `include` compounded it, because
+   a file matching no pattern vanishes entirely — a module with no tests at all
+   would never appear, which is the one row worth having.
+3. The answer is neither filter. **One command runs both suites and merges them.**
+
+`tools/coverage.sh` runs the 903 unit tests from this repo's root and the 207
+integration tests from ha-core's test tree, both inside the devcontainer — which
+already runs both — then `coverage combine`. Output is a single report in
+`coverage/`, paths relative to the repository root so Coverage Gutters resolves
+them in the editor.
+
+Merging is not bookkeeping. `protocol.py` measures 94% from the unit suite and 93%
+from the integration suite; **combined it is 97%**, because each covers lines the
+other misses. Neither number alone is a fact about the code. Measured 2026-08-20,
+the merged total is 78% over 1084 statements.
+
+`[tool.coverage.run]` therefore uses `source`, not `include`, plus
+`relative_files = true`; and `[tool.coverage.paths]` maps the integration run's
+absolute `/workspaces/acp35/...` paths onto the unit run's repository-relative ones.
+Two traps, both hit before they were understood: the integration run must name the
+package as a **module**, since config `source` paths resolve against a working
+directory that is ha-core; and the merge must be `coverage combine` over separate
+data files, because `--cov-append` never applies the path mapping and pytest-cov's
+own end-of-session combine defeats `parallel = true`.
+
+**Phase 4b, done — and it replaced all of the above.** The two-run scheme worked but
+failed the actual requirement: a shell script producing data that only a third-party
+extension can display is not coverage in the IDE, and VS Code's own Test Explorer
+can only report on tests it runs itself. So every test had to become runnable on the
+host.
+
+`pytest-homeassistant-custom-component` 0.13.356 packages ha-core's test fixtures.
+With it, **all 1110 tests run in one `uv run pytest` in 16 seconds**, and
+`uv run pytest --cov` produces exactly the numbers the two-run merge produced — 78%
+total, `protocol.py` 97%. `tools/coverage.sh` and `[tool.coverage.paths]` are
+deleted, the Coverage Gutters extension is no longer recommended, and Test Explorer's
+**Run Tests with Coverage** is the supported route.
+
+Four things the migration turned up, none of them guessable in advance:
+
+- `requires-python = ">=3.14"` was too loose. Home Assistant needs `>=3.14.2` — the
+  comment beside it already said so, but the constraint did not enforce it.
+- PHACC's fixtures are async and autouse, so 903 synchronous unit tests error under
+  pytest-asyncio's strict mode. `asyncio_mode = "auto"` settles it, which is what
+  ha-core sets for the same reason.
+- `entity_registry_enabled_by_default` lives in ha-core's
+  `tests/components/conftest.py`, which PHACC does not package — it carries the root
+  fixtures, not the per-domain ones. Four lines locally.
+- `fake_ir` needed no relocation, so HACS's rule of one directory under
+  `custom_components/` is intact. The 39 tests that use it pass.
+
+Tests are now grouped `tests/unit`, `tests/integration`, `tests/hardware`, so the
+Test Explorer shows what each suite is. Three symlinks into ha-core's test tree are
+gone from `tools/link_devcontainer.sh`; the container is now only for running Home
+Assistant itself and for hardware sessions.
+
+**The virtualenv had to move off `/mnt/c`, and that is not a detail.** Home Assistant
+arrives with 129 packages whose fixtures touch thousands of files, and every one of
+those crosses WSL2's 9p mount. Measured here, same code, same repository location:
+
+| | venv on `/mnt/c` | venv on ext4 |
+| - | ---------------- | ------------ |
+| `uv sync` | ~20 min | 2.4 s |
+| 9 integration tests | 19.0 s | 3.2 s |
+| whole suite | 7m34s | ~1m45s |
+
+The fix is uv's own: `preview-features = ["centralized-project-envs"]` in
+`[tool.uv]`. uv keeps the environment in its cache — which is on the user's native
+filesystem — and maintains `.venv` as a link to it, so activation, the git hooks and
+the editor need to know nothing. It is declared in `pyproject.toml`, so it applies to
+every contributor rather than being a local ritual, and an older uv ignores the
+unknown preview name with a warning and builds an ordinary `.venv`.
+
+Two hand-rolled alternatives were tried first and are worse. A manual symlink works
+but has to be recreated by hand in every clone and documented in the README.
+`UV_PROJECT_ENVIRONMENT` is worse still: the git hooks run `uv run` from a shell that
+never sourced a profile, so a variable set only in the editor would leave the
+pre-push hook — which runs the whole suite — on the slow interpreter. uv's own docs
+also warn it clobbers when shared across projects.
+
+`.gitignore` needed `.venv` without a trailing slash either way, since `.venv/`
+matches a directory and not the link.
+
+The unit loop also slowed, 3 s to 13 s, because PHACC's plugin loads Home Assistant's
+fixtures for every session. `uv run pytest tests/unit -p no:homeassistant` restores
+2.9 s for editing a codec; the full run stays the default everywhere else.
+
+**Consequence for phase 5:** integration tests in CI are no longer out of scope.
+They are simply part of `uv run pytest`.
 
 The full local command:
 
@@ -456,23 +546,31 @@ remote consumer. Add `coverage/`, `.coverage` and `test-results/` to `.gitignore
 {
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
-  "python.testing.pytestArgs": ["tests", "--cov"],
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+  "python.testing.pytestArgs": ["tests"]
 }
 ```
 
-The Python extension runs coverage through `pytest-cov`, and when it finds `--cov`
-already in `pytestArgs` it makes no further edits to the coverage arguments. Without
-it the extension injects `--cov=.`, which measures the whole workspace and overrides
-the `source` above. The cost is that ordinary Test Explorer runs also collect
-coverage; on a 3-second suite that is acceptable, and it is what makes **Run Tests
-with Coverage** work with no further setup.
+**Amendment, measured.** An earlier draft put `--cov` in `pytestArgs`, reasoning that
+the extension injects `--cov=.` when it finds none and that this would override the
+`source` list. Both halves were wrong in practice. The injected `--cov=.` produces
+*exactly* the same report — 1084 statements, 204 missed, 78% — because the `omit`
+list narrows it to the same files. And forcing `--cov` applies it to every run,
+including a single test: one file measured **6%**, which in the Test Explorer paints
+the rest of the codebase red. Coverage belongs to **Run Tests with Coverage** and
+nothing else.
+
+No `python.defaultInterpreterPath` either: the extension finds `.venv` in the
+workspace root on every platform, and a hardcoded path would name `bin/python` where
+Windows keeps `Scripts\python.exe`.
 
 Coverage flags stay **out of `addopts`** so `uv run pytest` keeps its plain, fast
 default for the pre-push hook and CI's own explicit invocation.
 
-`.vscode/extensions.json` recommends `ms-python.python`, `charliermarsh.ruff`,
-`editorconfig.editorconfig` and `ryanluker.vscode-coverage-gutters`.
+`.vscode/extensions.json` recommends `ms-python.python`, `charliermarsh.ruff` and
+`editorconfig.editorconfig`. **Not** `ryanluker.vscode-coverage-gutters`, which an
+earlier draft of this plan added: after phase 4b the Test Explorer runs every test
+itself, so its own coverage view is complete and no third-party extension is
+involved in reading it.
 
 ### `.pre-commit-config.yaml`
 
@@ -731,10 +829,12 @@ updates SHA pins and their version comments) and `uv`. Note in a comment that
 Dependabot does **not** update `.pre-commit-config.yaml` revs; `uv run prek
 auto-update` is the command for those, run by hand.
 
-Integration tests stay out of CI: `tests/integration/` needs ha-core's `hass`
-fixture and test tree, wired by `tools/link_devcontainer.sh` inside the devcontainer.
-The reference repo does run container-based integration tests in CI, so record in
-CONTRIBUTING that this is a deliberate gap and what closing it would take.
+**Integration tests are in CI**, as of phase 4b — no longer a gap to explain away.
+`uv sync --locked` installs Home Assistant through
+`pytest-homeassistant-custom-component`, and `uv run pytest` runs all 1110 tests.
+The reference repo needs a Docker build and a devcontainer for the equivalent; here
+it is the same command a developer runs. Only the install is heavier, which the uv
+cache absorbs.
 
 **Exercise:** push the branch and confirm each workflow runs; open a throwaway PR to
 see the test-results check and comment appear; merge to main and confirm the `badges`
@@ -849,7 +949,6 @@ then, the custom-repository route works with one extra step for the user.
 - A mypy or pyright gate — the `tsc` equivalent. It needs Home Assistant installed to
   type-check the integration, so it belongs with the devcontainer work.
 - A markdown/YAML/JSON formatter (prettier's remaining coverage).
-- Running `tests/integration/` in CI.
 - The `hacs/default` inclusion PR.
 - `NOTICE`, per-file license headers, SECURITY.md, CODEOWNERS.
 - Any change to protocol, entity or storage code.

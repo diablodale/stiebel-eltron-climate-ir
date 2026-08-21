@@ -1,12 +1,18 @@
 """Fixtures for the Home Assistant integration tests.
 
-These run inside the devcontainer, from ha-core's test tree, because they need
-its `hass` fixture and `MockConfigEntry`. See docs/ha_ir_platform/devcontainer.md.
+These need a running Home Assistant and its test fixtures, both supplied by
+`pytest-homeassistant-custom-component`, which packages ha-core's own. They run
+here, beside the unit tests, in the same `pytest` invocation -- so one run covers
+the whole codebase and the editor's Test Explorer can drive it.
+
+The integration is imported as `custom_components.stiebel_eltron_ir`, the same name
+Home Assistant's loader uses. That matters beyond tidiness: importing it under any
+other name would create a second copy of the enums, and an identity check such as
+`mode is Acp35Mode.COOL` would then fail against the loader's objects for no visible
+reason. `pythonpath` in pyproject puts the repository root where that name resolves.
 """
 
-import sys
 from collections.abc import Generator
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,16 +20,7 @@ from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from tests.common import MockConfigEntry
-
-import tests
-
-# Home Assistant's loader imports custom integrations as `custom_components.X`
-# from the config directory, which under test is tests/testing_config. Put it on
-# the path so these tests import the *same* module objects the loader will, and
-# not a parallel copy under a different package name — enum identity checks such
-# as `mode is Acp35Mode.COOL` would silently fail against a duplicate import.
-sys.path.insert(0, str(Path(tests.__file__).parent / "testing_config"))
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.stiebel_eltron_ir.const import (
     CONF_EMITTER,
@@ -40,6 +37,22 @@ TIMER_ID = "sensor.stiebel_eltron_acp_35_last_known_timer"
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Load the custom component under test."""
+
+
+@pytest.fixture
+def entity_registry_enabled_by_default() -> Generator[None]:
+    """Enable entities that ship disabled, as ha-core's fixture of this name does.
+
+    Home Assistant defines it in `tests/components/conftest.py`, which
+    pytest-homeassistant-custom-component does not package -- it carries the root
+    test fixtures, not the per-domain ones. The timer sensor is a diagnostic and is
+    disabled by default, so its tests ask for this.
+    """
+    with patch(
+        "homeassistant.helpers.entity.Entity.entity_registry_enabled_default",
+        return_value=True,
+    ):
+        yield
 
 
 @pytest.fixture

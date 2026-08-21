@@ -159,11 +159,39 @@ measured, and what it ruled out, is in [plan.md](docs/ha_ir_platform/plan.md).
 
 ```bash
 uv sync
-uv run pytest          # encoder and capture tests, no Home Assistant needed
+uv run pytest                    # every test: codecs, tooling and the integration
+uv run pytest --cov              # the same, with coverage of the whole codebase
+uv run pytest tests/unit -p no:homeassistant   # the fast loop, ~3s
+uv run prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 ```
 
-Integration tests need Home Assistant and run inside the devcontainer; see
-[devcontainer.md](docs/ha_ir_platform/devcontainer.md).
+That is the whole setup, on Linux, macOS or Windows. The integration tests need no
+container: Home Assistant and its test fixtures come from
+`pytest-homeassistant-custom-component`, pinned to one exact Home Assistant so the
+tests prove the integration against a known version. VS Code's Test Explorer drives
+the same run, including **Run Tests with Coverage**.
+
+`uv sync` keeps the environment in uv's cache and makes `.venv` a link to it, which
+`pyproject.toml` asks for with uv's `centralized-project-envs`. Activation, the git
+hooks and the editor all use `.venv` as usual and need to know nothing about it.
+
+That matters on one kind of machine and is invisible on the rest. Home Assistant
+brings 129 packages, and the fixtures that walk them are punishing over a filesystem
+that is not native — measured on a checkout under WSL2's `/mnt/c`, with the cache on
+ext4 where uv puts it by default:
+
+| | environment beside the repo | environment in uv's cache |
+| - | --------------------------- | ------------------------- |
+| `uv sync` | ~20 min | 2.2 s |
+| nine integration tests | 19.0 s | 3.2 s |
+| whole suite | 7m34s | ~1m35s |
+
+An older uv ignores the unknown preview name with a warning and creates an ordinary
+`.venv` directory, which works exactly as it always did.
+
+Hardware tests are deselected by default and need the KC868-AG, the appliance, or a
+human; the devcontainer is still how Home Assistant itself is run against this
+integration. See [devcontainer.md](docs/ha_ir_platform/devcontainer.md).
 
 ## Trademark Legal Notices
 

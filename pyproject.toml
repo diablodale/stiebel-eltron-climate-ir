@@ -9,9 +9,10 @@ license-files = ["LICENSE"]
 readme = "README.md"
 authors = [{ name = "Dale Phurrough" }]
 keywords = ["home-assistant", "hacs", "infrared", "stiebel-eltron", "climate", "acp35"]
-# infrared-protocols requires >=3.14; home-assistant/core requires >=3.14.2.
-# The system python3 on the dev machine is 3.12, so use `uv python install 3.14`.
-requires-python = ">=3.14"
+# infrared-protocols requires >=3.14; home-assistant/core requires >=3.14.2, and
+# Home Assistant is a dev dependency now, so the floor is its. The system python3 on
+# the dev machine is 3.12, so use `uv python install 3.14`.
+requires-python = ">=3.14.2"
 dependencies = ["infrared-protocols>=9"]
 
 [project.urls]
@@ -19,7 +20,27 @@ Homepage = "https://github.com/diablodale/stiebel-eltron-climate-ir"
 Issues = "https://github.com/diablodale/stiebel-eltron-climate-ir/issues"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+# commitizen and prek are here rather than run through `uvx` because both are
+# invoked by git hooks that fire long after any `uvx` process has gone: the hook
+# shim must find them at a stable path, and one pinned version in uv.lock beats a
+# second pin in a hook `rev` that drifts from it.
+#
+# pytest-homeassistant-custom-component packages ha-core's own test fixtures, which
+# is what lets the integration tests run here instead of only inside the
+# devcontainer.
+#
+# Pinned exactly, not floored. Its own metadata carries `homeassistant==2026.8.2`,
+# so this one number decides which Home Assistant the tests prove the integration
+# against -- and a released wheel is immutable, so the pin is as precise as naming a
+# commit. With `>=` a `uv lock --upgrade` would move the mocked Home Assistant with
+# no visible change here; editing this line is how that happens instead.
+dev = [
+  "pytest>=8",
+  "pytest-cov>=6",
+  "pytest-homeassistant-custom-component==0.13.356",
+  "commitizen>=4.18",
+  "prek>=0.4",
+]
 # No group for `pytest -m hardware`. It drives Home Assistant over REST, which
 # `urllib` does, and its conftest is imported during collection of *every* run --
 # before `-m` deselection -- so a third-party client there would break the
@@ -28,21 +49,41 @@ dev = ["pytest>=8"]
 # the same API rather than a second connection.
 
 [tool.uv]
+# Keep the environment in uv's cache and let uv maintain `.venv` as a link to it.
+#
+# Home Assistant is a test dependency, and its 129 packages and the fixtures that
+# walk them are punishing on a filesystem that is not native -- measured on a
+# checkout under WSL2's /mnt/c: `uv sync` 20 minutes against 2 seconds, the test
+# suite 7m34s against 1m45s. uv's cache sits on the user's own filesystem, so this
+# fixes that for everyone it affects and changes nothing for everyone it does not.
+#
+# A preview feature: an older uv ignores the unknown name with a warning and makes
+# an ordinary `.venv` directory, which works exactly as before.
+preview-features = ["centralized-project-envs"]
 # Nothing here is installable; this repo is tooling, tests and a custom_component
 # that Home Assistant loads from source.
 package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The protocol modules are imported as `devices.<model>.protocol` rather than
-# through the stiebel_eltron_ir package, whose __init__ imports homeassistant and
-# so cannot load outside the devcontainer. They are deliberately HA-free, as are
-# the `devices` package files on the path to them.
-pythonpath = ["custom_components/stiebel_eltron_ir", "tools"]
+# Every suite runs from here, grouped by what it needs:
+#   tests/unit         nothing but this repo
+#   tests/integration  Home Assistant, supplied by pytest-homeassistant-custom-component
+#   tests/hardware     the KC868-AG and the appliance; deselected by addopts below
+#
+# The codecs are imported as `devices.<model>.protocol`, not through the
+# stiebel_eltron_ir package, so a unit test reaches them without Home Assistant. The
+# repository root is on the path too, because the integration tests import
+# `custom_components.stiebel_eltron_ir` -- the same name Home Assistant's loader
+# uses, so enum identity holds against the objects the loader created.
+pythonpath = ["custom_components/stiebel_eltron_ir", "tools", "."]
+# Home Assistant's fixtures are async and autouse, and a synchronous unit test that
+# receives one is an error under pytest-asyncio's strict mode. ha-core sets this for
+# the same reason.
+asyncio_mode = "auto"
 # tests/custom_components holds Home Assistant components used as test fixtures
-# (fake_ir), not tests. tests/integration needs ha-core's conftest and runs inside
-# the devcontainer from its test tree, not from here.
-norecursedirs = ["tests/custom_components", "tests/integration"]
+# (fake_ir), not tests.
+norecursedirs = ["tests/custom_components"]
 markers = [
   "hardware: needs the KC868-AG, the ACP 35, or the original remote",
   "manual: needs a human to press a button or observe the unit",
@@ -58,6 +99,41 @@ markers = [
 # they skip unless HW_RESTORE names the state to put the appliance back to. See
 # tests/hardware/conftest.py.
 addopts = "-m 'not hardware'"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+# Writes the version into pyproject.toml *and* uv.lock's entry for this package,
+# which `pep621` does not. Without it, `uv sync --locked` in CI fails after a bump.
+version_provider = "uv"
+# The version Home Assistant and HACS actually read. `:version` confines the rewrite
+# to the one line holding it.
+version_files = ["custom_components/stiebel_eltron_ir/manifest.json:version"]
+tag_format = "v$version"
+# Pre-release: a breaking change moves 0.5 -> 0.6, never to 1.0.
+major_version_zero = true
+update_changelog_on_bump = true
+annotated_tag = true
+# Signs the tag. The bump *commit* is signed by `commit.gpgsign`, since commitizen
+# runs a plain `git commit` and leaves that decision to git config.
+gpg_sign = true
+
+[tool.coverage.run]
+branch = true
+# One `pytest --cov` covers everything, because every suite runs here now. That is
+# what makes VS Code's own "Run Tests with Coverage" tell the whole truth rather
+# than half of it.
+#
+# `source` rather than `include`, so a file no test ever touches still appears, at
+# 0%. That is the row worth having.
+source = ["custom_components/stiebel_eltron_ir", "tools"]
+omit = ["*/.venv/*", "*/site-packages/*", "tests/*"]
+# Keeps reported paths relative to this file, so an lcov or Cobertura report resolves
+# in the editor and in CI wherever the checkout happens to live.
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
 [tool.ruff]
 line-length = 88

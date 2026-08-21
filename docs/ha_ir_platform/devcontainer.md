@@ -1,40 +1,57 @@
-# Home Assistant development environment
+# Running Home Assistant against this integration
 
-A Home Assistant core devcontainer used to develop and test
-`custom_components/stiebel_eltron_ir` without touching the KC868-AG or the air
-conditioner. Setup follows
+A Home Assistant core devcontainer, for the two things a test cannot do. Setup
+follows
 [setup_devcontainer_environment](https://developers.home-assistant.io/docs/setup_devcontainer_environment/).
 
-## Host constraints
+1. **Run a real Home Assistant.** Walk the config flow as a user does, see the
+   entities appear, watch the device page. The suite proves the integration behaves;
+   only a running instance shows what the README describes.
+2. **Hardware sessions.** `acp35_bench` records what the KC868-AG's receiver hears
+   and transmits raw frames through its emitter. Every open question the protocol
+   had was settled here.
 
-This repo lives on a Windows volume, exposed to WSL2 at `/mnt/c` over **9p**, and
-is bind-mounted into the container. Two consequences worth knowing before you
-wonder why something is not happening:
+**Development and testing no longer need it.** All 1110 tests, and their coverage,
+run on the host with `uv run pytest` — Home Assistant and its fixtures come from
+`pytest-homeassistant-custom-component`.
 
-- **inotify does not fire for Windows-hosted files under WSL2.** Home Assistant
-  will not auto-reload on edit and `pytest-watch` will not react. Restart
-  Home Assistant manually after changing the integration.
-- Bulk I/O over the mount is slow. Only this repo pays that cost; ha-core itself
-  is cloned to ext4, where the dependency install and core test runs happen.
+A real Home Assistant could in principle run on the host too, since `homeassistant`
+is a dev dependency — but `home-assistant-frontend` is not in `uv.lock`, so there
+would be no interface, and Home Assistant installs further requirements into
+`config/deps` at runtime. The container already provides all of it.
 
-`npx` must be the WSL nvm one, not the Windows install under `/mnt/c`. nvm is
-sourced from `~/.bashrc`, so a **non-interactive** shell silently falls back to
-Windows Node and would hand Windows paths to a Linux workspace:
+## Only on WSL2, with the checkout on a Windows volume
 
-```bash
-export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"
-command -v npx        # must NOT be under /mnt/c
-```
+None of this applies on native Linux or macOS, where the setup below is the same
+minus these three snags.
+
+- **Home Assistant does not notice edits.** inotify does not fire for files under
+  `/mnt/c`, so restart Home Assistant after changing the integration rather than
+  waiting for a reload that never comes.
+- **Bulk I/O across the mount is slow.** Clone ha-core to a Linux filesystem, not
+  beside this repo: its dependency install writes thousands of files.
+- **`npx` must resolve to nvm's Node**, not to a Windows install reachable through
+  `/mnt/c`, which would hand Windows paths to a Linux workspace. Every `npx` command
+  in this document depends on it. A shell you typed into has already sourced nvm from
+  `~/.bashrc` and is fine; a script, a cron job or any other non-interactive shell has
+  not, and must do it first, for example:
+
+  ```bash
+  export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh"   # only where nvm is not loaded
+  command -v npx                                       # expect a path outside /mnt/c
+  ```
 
 ## One-time setup
 
 ```bash
-# 1. Clone the fork onto ext4, NOT under /mnt/c
+# 1. Clone the ha-core fork the container is built from
 git clone --filter=blob:none https://github.com/diablodale/ha-core.git ~/src/ha-core
 cd ~/src/ha-core && git remote add upstream https://github.com/home-assistant/core.git
 
-# 2. Build and start. `up` runs postCreateCommand (script/setup) and
-#    postStartCommand (script/bootstrap) itself, so there is nothing else to invoke.
+# 2. Build and start, bind-mounting this repo at /workspaces/acp35. `source` is
+#    wherever you cloned it; every later command uses the target path, not this one.
+#    `up` runs postCreateCommand (script/setup) and postStartCommand
+#    (script/bootstrap) itself, so there is nothing else to invoke.
 npx --yes @devcontainers/cli up --workspace-folder ~/src/ha-core \
   --mount 'type=bind,source=/mnt/c/njs/stiebel-eltron-climate-ir,target=/workspaces/acp35'
 
@@ -42,10 +59,10 @@ npx --yes @devcontainers/cli up --workspace-folder ~/src/ha-core \
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   bash -lc 'ls /workspaces/acp35 && touch /workspaces/acp35/.mnt-probe'
 
-# 4. Create the six symlinks ha-core needs to load this repo's sources.
-#    ha-core gitignores config/, and its test tree must contain the integration
-#    tests for them to reach the `hass` fixture, so both reference sources here.
-#    Runs inside the container, where the target paths resolve. Re-running is safe.
+# 4. Create the three symlinks ha-core needs to load this repo's sources.
+#    ha-core gitignores config/, so the components Home Assistant loads at runtime
+#    are referenced from here. Runs inside the container, where the target paths
+#    resolve. Re-running is safe.
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   /workspaces/acp35/tools/link_devcontainer.sh
 ```
@@ -61,33 +78,29 @@ infrared:
   - platform: fake_ir
 ```
 
-## Integration tests
+## Integration tests do not need this container
 
-The tests in `tests/integration/` need ha-core's `hass` fixture and
-`MockConfigEntry`, so they run from **ha-core's** test tree rather than this
-repo's. Three of the six symlinks in step 4 wire them in: the tests themselves as
-if they were a core component's suite, plus both custom components where
-`enable_custom_integrations` looks for them.
+They did once. `tests/integration/` now runs on the host, in the same `uv run
+pytest` as everything else, because `pytest-homeassistant-custom-component`
+packages ha-core's own `hass` fixture and `MockConfigEntry`. Nothing is symlinked
+into ha-core's test tree, and no `sys.path` manipulation is needed: `pythonpath` in
+`pyproject.toml` puts the repository root where `custom_components.stiebel_eltron_ir`
+resolves, which is the name Home Assistant's loader uses — import it under any other
+name and a second copy of the enums appears, after which `mode is Acp35Mode.COOL`
+fails for no visible reason.
 
-`tests/integration/conftest.py` puts `tests/testing_config` on `sys.path` so the
-tests import `custom_components.stiebel_eltron_ir` — the *same* module object
-Home Assistant's loader uses. Importing it under any other package name creates a
-second copy of the enums, and identity checks like `mode is Acp35Mode.COOL` then
-fail for no visible reason.
+That package pins an exact Home Assistant version (0.13.356 is 2026.8.2), so bumping
+it is how this repo moves to a new Home Assistant, and the tests then run against
+precisely what users will run.
 
-`pyproject.toml` excludes `tests/integration` from this repo's own pytest run,
-since it cannot supply those fixtures.
+One fixture had to be written locally. `entity_registry_enabled_by_default` lives in
+ha-core's `tests/components/conftest.py`, which the package does not carry — it
+brings the root test fixtures, not the per-domain ones. It is four lines in
+`tests/integration/conftest.py`.
 
 ## Running
 
 ```bash
-# This repo's tests: protocol, captures, CLI. No Home Assistant, no hardware.
-uv run pytest
-
-# The integration tests, from inside the container
-npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
-  bash -lc 'cd /workspaces/ha-core && python -m pytest tests/components/stiebel_eltron_ir --no-cov -q'
-
 # Home Assistant, reachable at http://localhost:8123 (devcontainer.json forwards 8123)
 npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   bash -lc 'cd /workspaces/ha-core && exec python -m homeassistant -c config'
@@ -97,8 +110,8 @@ npx --yes @devcontainers/cli exec --workspace-folder ~/src/ha-core -- \
   bash -lc 'cd /workspaces/ha-core && python -m pytest tests/components/infrared --no-cov -q'
 ```
 
-The container's interpreter is `/home/vscode/.local/ha-venv/bin/python`; point the
-VS Code Python extension there.
+This repo's own tests do not run in the container. Run them on the host with
+`uv run pytest`; see [Development](../../README.md#development).
 
 ## Hardware sessions — the KC868-AG and the real remote
 

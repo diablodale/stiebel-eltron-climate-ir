@@ -1,0 +1,108 @@
+# Hooks are run by prek, a drop-in replacement for pre-commit. Install the git
+# shims once per clone -- naming every type, because prek has been reported to wire
+# only `pre-commit` when left to read default_install_hook_types:
+#
+#   uv run prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+#
+# `--no-verify` bypasses all of this locally. It does not bypass CI, and it does not
+# bypass the ruleset on main.
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      # .env holds a Home Assistant long-lived access token and is gitignored. This
+      # is what catches the day that gitignore is bypassed.
+      - id: gitleaks
+        # Duplicates flags the pinned entry already passes. Deliberate: stating them
+        # here pins the behaviour even if upstream drops them from its entry.
+        args: ['--redact', '--verbose']
+        stages: [pre-commit]
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.23.1
+    hooks:
+      # Audits GitHub Actions workflows. Its own `files` pattern scopes it to
+      # .github/workflows, dependabot.yml and action.yml, so it stays inert until
+      # those exist.
+      - id: zizmor
+        args: ['--pedantic']
+        stages: [pre-commit]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3
+    hooks:
+      # Lint before format, as astral-sh documents for --fix.
+      - id: ruff-check
+        args: [--fix]
+        stages: [pre-commit]
+      - id: ruff-format
+        stages: [pre-commit]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: fix-byte-order-marker
+        stages: [pre-commit]
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+        stages: [pre-commit]
+      - id: trailing-whitespace
+        args: ['--markdown-linebreak-ext=md']
+        # 134 lines of the ACP 35 protocol document end in a single trailing space:
+        # verbatim ESPHome capture logs, the evidence the protocol was derived from.
+        # --markdown-linebreak-ext preserves a two-space line break, not a one-space
+        # one, so only an exclude saves them. Anchored on the filename rather than
+        # its directory, so moving the file does not disarm this.
+        exclude: Stiebel Eltron air conditioner ACP 35\.md$
+        stages: [pre-commit]
+      - id: check-json
+        # VS Code reads its own files as JSONC and the comments in them explain
+        # non-obvious settings, which is worth more than a syntax check on two
+        # files whose parser accepts them.
+        exclude: ^\.vscode/
+        stages: [pre-commit]
+      - id: check-yaml
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        stages: [pre-commit]
+      - id: check-added-large-files
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      # Signing is required. Neither local check verifies a signature -- this clone
+      # points gpg.program at the Windows GnuPG, which cannot open the Linux temp
+      # path `git verify-commit` hands it. See tools/check_signing.py.
+      - id: signing-configured
+        name: Commit signing is configured
+        stages: [pre-commit]
+        language: system
+        entry: uv run python tools/check_signing.py config
+        pass_filenames: false
+        always_run: true
+
+      - id: commitizen
+        name: Conventional commit message
+        stages: [commit-msg]
+        language: system
+        entry: uv run cz check --allow-abort --commit-msg-file
+
+      - id: signed-commits
+        name: Every pushed commit is signed
+        stages: [pre-push]
+        language: system
+        entry: uv run python tools/check_signing.py commits
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest
+        name: Unit tests
+        stages: [pre-push]
+        language: system
+        entry: uv run pytest -q
+        pass_filenames: false
+        always_run: true

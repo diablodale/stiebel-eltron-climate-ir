@@ -1,0 +1,17 @@
+{
+  // No `python.defaultInterpreterPath`: the extension finds `.venv` in the
+  // workspace root by itself, on every platform, and a hardcoded path would name
+  // `bin/python` where Windows has `Scripts\\python.exe`.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  // Every suite runs here -- unit, integration, and the hardware tests that addopts
+  // deselects -- so the Test Explorer collects all of them and "Run Tests with
+  // Coverage" measures the whole codebase in one pass.
+  //
+  // No `--cov` here on purpose. It would apply to *every* run, including a single
+  // test, and a partial run reports the rest of the codebase as uncovered -- one
+  // file measured 6% and would paint the editor red. "Run Tests with Coverage"
+  // instead injects `--cov=.`, which the omit list in pyproject narrows to exactly
+  // the same 1084 statements the source list gives.
+  "python.testing.pytestArgs": ["tests"]
+}
