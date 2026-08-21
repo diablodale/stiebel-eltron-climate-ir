@@ -1,0 +1,32 @@
+# Labels applied from the issue title and body by .github/workflows/issue-labels.yaml.
+#
+# There are no issue forms yet -- those are phase 6 -- so every rule here matches
+# free text. The delimited /regex/flags form is what enables `i`; `\b` keeps a
+# short token such as `ir` from matching inside another word.
+#
+# `sync-labels: 1` means an edit that stops matching removes the label again, so
+# a rule that is too broad is visibly wrong rather than quietly sticky.
+
+acp35:
+  - >-
+    /\bACP[\s-]?35\b/i
+
+protocol:
+  - >-
+    /\b(protocol|frame|checksum|pronto|raw timings|decoder|encoder|carrier|38\s?kHz)\b/i
+
+hardware:
+  - >-
+    /\b(KC868|ESPHome|emitter|receiver|IR blaster|remote control|transmit|LED)\b/i
+
+config-flow:
+  - >-
+    /\b(config flow|config entry|setup|reconfigure|already_configured|integration entry)\b/i
+
+hacs:
+  - >-
+    /\b(HACS|custom repository|install(ation|ing)?\s+(via|through|with)\s+HACS)\b/i
+
+documentation:
+  - >-
+    /\b(docs?|documentation|README|typo|wording)\b/i

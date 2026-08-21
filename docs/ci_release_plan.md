@@ -409,13 +409,12 @@ Read from `commitizen/commands/bump.py` and `commitizen/git.py`:
   when `gpg_sign` is set. `tag.gpgsign = true` would sign it either way; `gpg_sign =
   true` in `pyproject.toml` states the requirement in the repository, so a clone
   without that git config still produces a signed tag.
-- `cz bump --no-verify` adds `--no-verify` to that commit. Do **not** reach for it by
-  default: it skips the commit-msg hook on the one commit whose message is generated
-  rather than written. It exists for one foreseeable clash — commitizen writes
-  `CHANGELOG.md`, and if `end-of-file-fixer` or `trailing-whitespace` decides to
-  rewrite it, the hook modifies a staged file and aborts the bump. If that happens,
-  the fix is to exclude `CHANGELOG.md` from those two hooks, not to disable
-  verification wholesale.
+- One clash is foreseeable: commitizen writes `CHANGELOG.md`, and if
+  `end-of-file-fixer` or `trailing-whitespace` rewrites it, the hook has modified a
+  staged file and the bump aborts. The fix is to exclude `CHANGELOG.md` from those
+  two hooks. Commitizen also offers a flag (don't use it) that skips verification
+  on the bump commit; it disables the commit-msg hook on the one commit whose message
+  is generated rather than written.
 
 ### Coverage and test results
 
@@ -730,10 +729,13 @@ Without a schedule, both failures would surface at the worst moment — while cu
 a release, mixed in with whatever else changed. A scheduled run surfaces them
 independently, attributable to nothing local, which is exactly the useful signal.
 
-**The schedule is weekly, `0 0 * * 1`**, not nightly. Home Assistant ships monthly
-and HACS changes its rules rarely, so a week is well inside the window between a
-rule changing and a release needing it, and it is one run instead of seven.
-`workflow_dispatch` covers the case of wanting an answer immediately.
+**The schedule is weekly, `10 3 * * 1`** — Mondays at 03:10 UTC — not nightly. Home
+Assistant ships monthly and HACS changes its rules rarely, so a week is well inside
+the window between a rule changing and a release needing it, and it is one run
+instead of seven. Monday puts the answer at the start of the week rather than during
+it. The offset from the hour is deliberate: GitHub queues scheduled runs, and the top
+of the hour — `0 0` most of all — is when everyone else's cron fires, so a run there
+waits behind the crowd. `workflow_dispatch` covers wanting an answer immediately.
 
 ### The workflows
 
@@ -799,7 +801,7 @@ reference's "quality gates can't be bypassed" ordering:
   branches. If the badges ever stop updating, a rule silently extended to every
   branch is the first thing to check.
 
-**`hassfest.yaml`** — `on: push, pull_request, schedule: "0 0 * * 1", workflow_dispatch`;
+**`hassfest.yaml`** — `on: push, pull_request, schedule: "10 3 * * 1", workflow_dispatch`;
 checkout then `home-assistant/actions/hassfest`.
 
 **`hacs.yaml`** — same triggers; `hacs/action` with `category: "integration"` and no
@@ -841,6 +843,83 @@ see the test-results check and comment appear; merge to main and confirm the `ba
 branch is created with both JSON files; run `hassfest` and `hacs` via
 `workflow_dispatch` rather than waiting for the cron.
 
+### The release gate
+
+The plan as written published on a `v*` tag push and checked nothing but the
+manifest version. That is not a gate. `ci.yaml` filters on `branches: [main]`, which
+excludes tag refs, so **a tag push ran no tests at all**; and when commit and tag go
+together, `git push --follow-tags` starts the branch run and the release run at the
+same moment, with publishing far quicker than testing. The release won that race
+every time.
+
+A release must pass, on GitHub, against the tagged tree: the full test suite (unit
+and integration, one pytest run since phase 4b), hassfest, and HACS.
+
+`release.yaml` therefore runs all three itself rather than consulting an earlier run.
+`ci.yaml`, `hassfest.yaml` and `hacs.yaml` each gained a `workflow_call` trigger, and
+release.yaml calls them as jobs that `publish` depends on:
+
+```
+version ─┬─> ci        ─┐
+         ├─> hassfest  ─┼─> publish
+         └─> hacs      ─┘
+```
+
+Waiting for the branch-push runs instead was rejected, and not only for the race: a
+tag can be pushed on its own — `git push origin v0.5.0` for a commit already on main
+— and then there is no run to wait for. A gate that depends on an event that may
+never happen is not a gate. `version` runs first and alone so a mis-tagged release
+fails in seconds rather than after the whole suite.
+
+The cost is that a combined push tests the same commit twice, once for the branch and
+once for the tag. That is the price of a gate that holds however the tag arrives.
+
+To stop hassfest and HACS *also* running standalone on the tag push, their `push`
+trigger is now `branches: ['**']`. Not `tags-ignore: ['**']`, which reads like the
+same statement and is the opposite one: GitHub's rule is that "if you define only
+tags/tags-ignore or only branches/branches-ignore, the workflow won't run for events
+affecting the undefined Git ref", so a lone tag filter would have left branches
+undefined and stopped both workflows running on any push at all.
+
+### Amendments, written while building it
+
+Six, none of them guessable from the plan alone:
+
+- **The `checks` job must skip `signing-configured`.** It is an `always_run`
+  pre-commit hook, so `prek run --all-files` runs it, and it asks whether *this
+  working copy* is configured to sign the commit it is about to make. A runner makes
+  no commits and has no `commit.gpgsign`, so CI would have been red on every run.
+  `SKIP: signing-configured` on the step; the CI-relevant question — did GitHub
+  verify what was pushed — is the signature step that already runs first.
+- **No `actions/cache` step for `PREK_HOME`.** `j178/prek-action` v3 caches hook
+  environments itself, keyed on the config file, which is what the separate step was
+  for. Its `prek-version` is left at `latest` rather than pinned to uv.lock's: what a
+  hook *does* is decided by the `rev` pins in `.pre-commit-config.yaml`, and prek only
+  runs them, so a second pin would drift for nothing.
+- **hassfest and HACS are pinned to their default-branch HEAD, not to a tag.** Their
+  newest releases are `home-assistant/actions` 1.0.0 from 2020 and `hacs/action`
+  22.5.0 from 2022; pinning to those would freeze the wrapper years back. The
+  trailing comment reads `# master` / `# main` with the date in the comment above it,
+  and Dependabot moves them. This is exactly the contradiction the plan predicted:
+  their docs say a floating branch, `zizmor --pedantic` says a SHA.
+- **The coverage badge is computed from four counts, not from `line-rate`.** Cobertura's
+  root `line-rate` is statement coverage alone — 0.8118, an 81% badge — while `branch =
+  true` makes `pytest --cov` report 78%. `(lines-covered + branches-covered) /
+  (lines-valid + branches-valid)` reproduces 78% exactly. A badge that disagrees with
+  the command anyone can run is worse than no badge.
+- **One check, named `Test results`.** The reference's split into unit and integration
+  checks has nothing to describe here: phase 4b made both one pytest run and one JUnit
+  file. The badge is `tests.json`, not `unit-tests.json`. Its skipped count is normally
+  zero, because the 166 hardware tests are *deselected* by `addopts` and never reach
+  the JUnit file.
+- **`release.yaml` needed two things zizmor asked for**: a `concurrency` group (with
+  `cancel-in-progress: false` — a half-finished publish must not be superseded), and
+  `enable-cache: false` on `setup-uv`, since a job that both restores a cache and
+  publishes is the shape a cache-poisoning attack needs. Its fallback test is
+  `grep -q '^- ' notes.md`, not `[ -s notes.md ]`: `cz changelog` emits a version
+  heading even when every commit in the range is a hidden type, so the file is never
+  empty.
+
 ## Phase 6 — Going public, community files and README badges
 
 One manual step by Dale opens this phase, because the badges added below are the
@@ -864,13 +943,13 @@ Then the files:
   markers — `hardware`, `manual`, `disruptive` — what `HW_RESTORE` gates, and the
   devcontainer path for integration tests) · Coverage (the command, the VS Code Test
   Explorer route, and how to enable the Codecov upload later) · Git hooks
-  (`uv run prek install …`, what runs at which stage, and that `--no-verify` still
-  leaves CI enforcing everything) · Commit conventions (the accepted types, how each
+  (`uv run prek install …`, what runs at which stage, and that they are a local
+  convenience rather than the enforcement) · Commit conventions (the accepted types, how each
   maps to a version step and to a changelog section, and the `fix(security):`
   convention) · **Signed commits** (required on `main` by ruleset and checked on
   every PR; how to configure `commit.gpgsign`, `tag.gpgsign` and `user.signingkey`,
-  and that `--no-verify` bypasses the local hooks but not the ruleset) · Release
-  process (`cz bump`) · PR guidelines.
+  and that the ruleset decides, so an unsigned commit is refused at the push whatever
+  happened locally) · Release process (`cz bump`) · PR guidelines.
 - **`.github/ISSUE_TEMPLATE/`** — `bug_report.yml`, `feature_request.yml`, and
   `config.yml` with `blank_issues_enabled: false`. The bug form asks for what
   actually determines an answer here: appliance model, Home Assistant version,

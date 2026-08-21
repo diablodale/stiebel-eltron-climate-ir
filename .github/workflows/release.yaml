@@ -1,0 +1,136 @@
+name: Release
+
+# `cz bump` makes the commit and the signed annotated tag; pushing the tag is
+# what starts this. Nothing here decides a version -- it only publishes the one
+# already recorded.
+#
+# Everything a release must pass is run *here*, by this workflow, against the
+# tagged tree: the full test suite, hassfest and HACS. It does not look for an
+# earlier CI run and it does not wait for one, because a `v*` tag can be pushed
+# on its own -- `git push origin v0.1.0` with the commit already on main -- and
+# then no branch-push run exists to consult. Even when commit and tag go
+# together, `git push --follow-tags` starts the branch run and this one at the
+# same moment, and publishing takes far less time than testing does, so a gate
+# that trusted the other run would lose that race.
+#
+# The cost is that a combined push tests the same commit twice. That is the
+# price of a gate that holds however the tag arrives.
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+# One release per tag, and `cancel-in-progress: false` because a publish that is
+# half done must finish rather than be superseded.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Cheap and first, so a mis-tagged release fails in seconds rather than after
+  # the whole suite has run. `cz bump` writes pyproject.toml, uv.lock and
+  # manifest.json in one commit, so a mismatch means the tag was made by hand or
+  # the bump was edited afterwards. Home Assistant and HACS read manifest.json,
+  # so that is the copy that has to be right.
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check manifest version matches the tag
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          MANIFEST=$(jq -r .version custom_components/stiebel_eltron_ir/manifest.json)
+          if [ "$MANIFEST" != "$VERSION" ]; then
+            echo "::error::manifest.json version is ${MANIFEST}, tag says ${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  # The three gates, in parallel, all against the tagged commit. `ci` is the
+  # whole of ci.yaml -- signature verification, the prek sweep, and the single
+  # pytest run that covers the unit and integration suites together.
+  ci:
+    name: CI
+    needs: [version]
+    uses: ./.github/workflows/ci.yaml
+    permissions:
+      contents: read # checkout, and the compare API in the signature step
+      pull-requests: read # ci.yaml's signature step lists PR commits; unused on a tag
+
+  hassfest:
+    name: hassfest
+    needs: [version]
+    uses: ./.github/workflows/hassfest.yaml
+    permissions:
+      contents: read
+
+  hacs:
+    name: HACS
+    needs: [version]
+    uses: ./.github/workflows/hacs.yaml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish release
+    # This list is the gate. A failure in any one of them leaves the tag on the
+    # remote with no release attached, which is the recoverable state: fix,
+    # retag, push again.
+    needs: [version, ci, hassfest, hacs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      # Full history and tags: `cz changelog <version>` reads the range between
+      # this tag and the one before it.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # uv is not on the runner image, and `uvx` below needs it. Caching is off:
+      # this job publishes, and a job that both restores a cache and publishes is
+      # the shape a cache-poisoning attack needs. One `uvx` fetch of commitizen
+      # is not worth that.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+
+      # `--verify-tag` aborts if the tag is not on the remote, so a local-only
+      # tag cannot produce a release pointing at nothing.
+      #
+      # `cz changelog` can render a heading and nothing else -- a release holding
+      # only types the changelog hides, which the pyproject config makes likely
+      # for a run of refactor or perf commits. So the test is for an actual
+      # entry, not for a non-empty file. `--generate-notes` is gh's own fallback,
+      # building title and body from GitHub's Release Notes API.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          uvx --from commitizen cz changelog "$VERSION" --dry-run > notes.md
+          if grep -q '^- ' notes.md; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md
+          else
+            echo "::warning::cz changelog rendered nothing; using generated notes"
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          fi

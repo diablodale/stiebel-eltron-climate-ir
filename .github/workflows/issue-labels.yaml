@@ -1,0 +1,29 @@
+name: Issue automation
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  issue-labels:
+    name: Labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read .github/issue-labels.yml
+      issues: write # add and remove labels, and create ones that do not exist
+    steps:
+      # `sync-labels: 1` removes a label again when an edit stops matching, so
+      # the labels track the current text rather than accumulating.
+      - name: Label the issue
+        uses: github/issue-labeler@c1b0f9f52a63158c4adc09425e858e87b32e9685 # v3.4
+        with:
+          configuration-path: .github/issue-labels.yml
+          enable-versioned-regex: 0
+          sync-labels: 1
+          repo-token: ${{ github.token }}

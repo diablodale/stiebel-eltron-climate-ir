@@ -1,0 +1,49 @@
+name: HACS
+
+# Scheduled for the same reason as hassfest.yaml, and one more: hacs/action
+# evaluates HACS's current publishing requirements *and* live GitHub state --
+# description, topics, issues enabled, releases present. Someone editing
+# repository settings breaks it with no commit at all, which no push-triggered
+# workflow would ever notice.
+on:
+  push:
+    # Every branch, no tags; a `v*` tag push runs this through release.yaml
+    # instead. See hassfest.yaml for why this is `branches` and not
+    # `tags-ignore`.
+    branches: ['**']
+  pull_request:
+  schedule:
+    - cron: '10 3 * * 1' # Mondays at 03:10 UTC
+  workflow_dispatch:
+  workflow_call: # release.yaml gates the publish on this
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # HACS documents this as `@main`, and its newest tagged release is 22.5.0
+      # from 2022. The SHA below is main as of 2026-06-08, pinned because
+      # `zizmor --pedantic` requires it and Dependabot maintains it. As with
+      # hassfest, the pin does not freeze the rules: the action runs
+      # docker://ghcr.io/hacs/action:main, pulled at run time.
+      #
+      # No `ignore:` list. Every check should pass; one that cannot is a fact
+      # worth seeing rather than one to suppress.
+      - name: Run HACS validation
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+        with:
+          category: integration

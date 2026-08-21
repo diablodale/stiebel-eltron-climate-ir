@@ -1,0 +1,179 @@
+name: Publish test results
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    # `workflow_run` always executes this file from the default branch, never
+    # from a fork's copy, which is what lets results be published with write
+    # scopes that CI itself never holds. That is the threat model the trigger
+    # was designed for.
+    workflows: ['CI'] # must match the `name:` in ci.yaml exactly
+    types: [completed]
+
+permissions: {}
+
+# Group by source repository and branch, not by github.ref: on workflow_run the
+# ref is the default branch, so it cannot distinguish two branches or two forks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  publish-test-results:
+    name: Publish test results
+    runs-on: ubuntu-latest
+    # Every conclusion except 'skipped'. If CI was cancelled and nothing newer
+    # supersedes it, the download below fails, the check registers as failed, and
+    # the pull request stays blocked -- which is correct: a cancelled run must
+    # never unblock anything.
+    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
+    permissions:
+      actions: read # download artifacts from the triggering run
+      checks: write # post the check on the commit
+      pull-requests: write # post the pass/fail comment
+    outputs:
+      json: ${{ steps.publish.outputs.json }}
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: test-results-unit
+          path: test-results
+          github-token: ${{ github.token }}
+
+      - name: Download GitHub event file
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: github-event
+          path: github-event
+          github-token: ${{ github.token }}
+
+      # `commit`, `event_file` and `event_name` come from the workflow_run
+      # payload, so results attach to the branch under test rather than to the
+      # default-branch commit that triggered this workflow.
+      - name: Publish test results
+        id: publish
+        uses: EnricoMi/publish-unit-test-result-action@c950f6fb443cb5af20a377fd0dfaa78838901040 # v2.23.0
+        with:
+          commit: ${{ github.event.workflow_run.head_sha }}
+          event_file: github-event/event.json
+          event_name: ${{ github.event.workflow_run.event }}
+          files: test-results/**/*.xml
+          check_name: Test results
+          comment_mode: always
+
+  update-badges:
+    name: Update badges
+    runs-on: ubuntu-latest
+    needs: [publish-test-results]
+    # Pushes to the default branch only. A pull request surfaces its numbers in
+    # the check and the comment; the badges describe `main`.
+    if: >-
+      ${{ github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch }}
+    permissions:
+      actions: read # download the coverage artifact
+      contents: write # push to the badges branch
+    steps:
+      - name: Download coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          name: coverage
+          path: coverage
+          github-token: ${{ github.token }}
+
+      # These commits are made by github-actions[bot] and pushed over HTTPS, so
+      # they are unsigned. That is why the signing ruleset targets `main` rather
+      # than all branches -- if the badges ever stop updating, a rule silently
+      # widened to every branch is the first thing to check.
+      - name: Write badge JSON and push to the badges branch
+        env:
+          TEST_JSON: ${{ needs.publish-test-results.outputs.json }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # jq reads the results through env, never through shell interpolation
+          # into the jq program.
+          read -r PASSED FAILED SKIPPED < <(
+            jq -rn 'env.TEST_JSON | fromjson | .stats
+                    | [.tests_succ, .tests_fail, .tests_skip] | @tsv'
+          )
+          for VAL in "$PASSED" "$FAILED" "$SKIPPED"; do
+            [[ "$VAL" =~ ^[0-9]+$ ]] || { echo "::error::non-integer stat: $VAL"; exit 1; }
+          done
+
+          # Name every non-zero count, so the scale of a failure is visible at a
+          # glance rather than just its existence.
+          MSG="${PASSED} passed"
+          [ "$FAILED"  -gt 0 ] && MSG="${MSG}, ${FAILED} failed"
+          [ "$SKIPPED" -gt 0 ] && MSG="${MSG}, ${SKIPPED} skipped"
+          # The 166 hardware tests are *deselected* by addopts, not skipped, and
+          # never reach the JUnit file at all -- so this count is normally zero
+          # and a non-zero one is worth reading. Only a failure turns it red.
+          if [ "$FAILED" -gt 0 ]; then COLOR="red"; else COLOR="brightgreen"; fi
+          printf -v TEST_BADGE \
+            '{"schemaVersion":1,"label":"Tests","message":"%s","color":"%s"}' \
+            "$MSG" "$COLOR"
+
+          # The percentage comes from the Cobertura report CI already produced,
+          # not from a coverage service. That is what lets the badge exist with
+          # no third-party account and no upload step.
+          #
+          # Computed from the four counts rather than read from `line-rate`,
+          # because `branch = true` is set: line-rate alone is statement coverage
+          # and reads 81% where `pytest --cov` reports 78%. A badge that
+          # disagrees with the command anyone can run is worse than none.
+          cov_attr() {
+            sed -n "s/.*<coverage [^>]*$1=\"\([0-9]*\)\".*/\1/p" \
+              coverage/coverage.xml | head -1
+          }
+          L_VALID=$(cov_attr lines-valid);    L_COV=$(cov_attr lines-covered)
+          B_VALID=$(cov_attr branches-valid); B_COV=$(cov_attr branches-covered)
+          for VAL in "$L_VALID" "$L_COV" "$B_VALID" "$B_COV"; do
+            [[ "$VAL" =~ ^[0-9]+$ ]] \
+              || { echo "::error::unreadable coverage.xml"; exit 1; }
+          done
+          COV_INT=$(awk -v lv="$L_VALID" -v lc="$L_COV" \
+                        -v bv="$B_VALID" -v bc="$B_COV" \
+            'BEGIN { t = lv + bv; if (t == 0) exit 1; printf "%.0f", (lc + bc) * 100 / t }')
+          if   [ "$COV_INT" -ge 80 ]; then COV_COLOR="brightgreen"
+          elif [ "$COV_INT" -ge 60 ]; then COV_COLOR="yellow"
+          else                             COV_COLOR="red"
+          fi
+          printf -v COVERAGE_BADGE \
+            '{"schemaVersion":1,"label":"Coverage","message":"%s%%","color":"%s"}' \
+            "$COV_INT" "$COV_COLOR"
+
+          # GITHUB_REPOSITORY is already an environment variable; using it keeps
+          # a template expression out of the script.
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}.git"
+
+          # The token goes in an Authorization header rather than the URL, so it
+          # reaches neither the remote URL nor .git/config. Git over HTTPS wants
+          # Basic; Bearer is rejected.
+          git config --global http.extraheader \
+            "AUTHORIZATION: Basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+
+          # Bootstrap the orphan branch on first run, so no manual setup step
+          # stands between a fresh clone and working badges.
+          if git clone --depth 1 --branch badges "$REPO_URL" badge-repo 2>/dev/null; then
+            cd badge-repo
+          else
+            mkdir badge-repo && cd badge-repo
+            git init -b badges
+            git remote add origin "$REPO_URL"
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          printf '%s\n' "$TEST_BADGE"     > tests.json
+          printf '%s\n' "$COVERAGE_BADGE" > coverage.json
+          git add tests.json coverage.json
+          # Same numbers as last time, e.g. a re-run: nothing to say.
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: update test badges"
+          git push origin HEAD:badges

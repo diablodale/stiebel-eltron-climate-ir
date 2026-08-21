@@ -1,0 +1,38 @@
+version: 2
+
+# `cooldown` on both ecosystems, at zizmor's prompting: Dependabot otherwise opens a
+# pull request the moment a release appears, which is exactly when a compromised one
+# is still up. A week is long enough for a bad release to be yanked and short enough
+# that a real security fix is not left sitting. It delays the proposal, not the
+# merge -- a fix needed sooner is still one `uv lock --upgrade-package` away.
+updates:
+  # Moves the SHA pins in .github/workflows/ and updates the trailing version
+  # comment with them, which is what makes pinning to a SHA maintainable rather
+  # than a slow drift into unpatched actions. It is also the only thing that
+  # maintains the hassfest and HACS pins, whose upstreams tag no releases and
+  # document a floating branch instead.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:10'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build
+
+  # Dependabot does **not** update the `rev` pins in .pre-commit-config.yaml.
+  # `uv run prek auto-update` is the command for those, run by hand.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:10'
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: build

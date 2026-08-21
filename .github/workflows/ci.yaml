@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches: [main] # a branch filter excludes tags, so a `v*` push never lands here
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # allows manual runs
+  # release.yaml calls this workflow and refuses to publish unless it passes.
+  # A tag can be pushed on its own, with no branch push to have tested the
+  # commit, so the release gate cannot rely on a run that may never exist -- it
+  # runs this one itself, against the tagged tree.
+  workflow_call:
+
+# Every job is read-only by default and adds only the scopes it needs.
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Quality gates first. `test` is gated on this job, so a failing lint or an
+  # unsigned commit stops the run before any test time is spent.
+  checks:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # compare API, and checkout
+      pull-requests: read # list the commits of a pull request
+    steps:
+      # Runs before checkout on purpose: `gh` and `github.token` need neither a
+      # working copy nor a language runtime.
+      #
+      # This asks what GitHub *verified*, not merely what carries a signature, so
+      # an unknown or untrusted key fails here. That is the one thing the local
+      # hooks cannot establish -- see tools/check_signing.py.
+      #
+      # The ruleset on `main` already rejects an unsigned push server-side, so
+      # this step is the diagnosis rather than the gate: it names the offending
+      # commit, and it still fires on branches the ruleset does not target.
+      #
+      # Unlike a PR-only check, this covers pushes too, because the normal path
+      # here is a direct push to `main` and a PR-only guard would never run.
+      # Every value reaching the shell arrives as an environment variable, never
+      # as a `${{ }}` expansion inside the script.
+      - name: Verify every commit is signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              mapfile -t SHAS < <(gh api \
+                "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" \
+                --paginate --jq '.[].sha')
+              ;;
+            push)
+              # `before` is all zeros for a newly created branch, and there is
+              # nothing to compare against; the pushed head is the whole answer.
+              if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+                SHAS=("$AFTER")
+              else
+                mapfile -t SHAS < <(gh api \
+                  "repos/${GITHUB_REPOSITORY}/compare/${BEFORE}...${AFTER}" \
+                  --jq '.commits[].sha')
+              fi
+              ;;
+            *)
+              # workflow_dispatch and anything else: check the ref it ran on.
+              SHAS=("$AFTER")
+              ;;
+          esac
+
+          FAILED=0
+          for SHA in "${SHAS[@]}"; do
+            VERIFIED=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}" \
+              --jq '.commit.verification.verified')
+            if [ "$VERIFIED" != "true" ]; then
+              echo "::error::Commit ${SHA} is not signed or its signature is not verified"
+              FAILED=1
+            fi
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Only `pre-commit` stage hooks run in an `--all-files` sweep, so the
+      # commit-msg and pre-push hooks in .pre-commit-config.yaml are not part of
+      # this. `cz check` has nothing to check without a message, and the pre-push
+      # pytest hook is the `test` job below.
+      #
+      # `signing-configured` is skipped: it asks whether *this working copy* is
+      # configured to sign the commit it is about to make, and a runner makes no
+      # commits. The CI-relevant question -- did GitHub verify what was pushed --
+      # is the step above.
+      #
+      # The action caches hook environments itself, keyed on the config file, so
+      # no separate actions/cache step is needed. prek itself is installed at
+      # `latest` rather than the version in uv.lock: what a hook does is decided
+      # by the `rev` pins in .pre-commit-config.yaml, and prek only runs them.
+      - name: Run prek hooks
+        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        env:
+          SKIP: signing-configured
+        with:
+          extra-args: --all-files
+
+  test:
+    name: Test and coverage
+    needs: [checks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # `--locked` fails rather than silently relocking, which is what makes
+      # `version_provider = "uv"` necessary: `cz bump` has to write the new
+      # version into uv.lock as well as pyproject.toml. uv fetches Python 3.14
+      # from `requires-python` on its own.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # One run covers everything -- codecs, tooling and the Home Assistant
+      # integration -- because pytest-homeassistant-custom-component supplies
+      # ha-core's fixtures. `addopts` deselects the hardware marker, so nothing
+      # reaches for the KC868-AG or the appliance.
+      #
+      # coverage.xml is Cobertura, which Codecov ingests and the badge job reads;
+      # lcov.info serves editors. Both come from the same measurement.
+      - name: Run tests with coverage
+        run: |
+          uv run pytest --cov --cov-report=term-missing \
+            --cov-report=xml:coverage/coverage.xml \
+            --cov-report=lcov:coverage/lcov.info \
+            --junitxml=test-results/unit/junit.xml
+
+      # `if: always()` because a failing test run is exactly when the results are
+      # worth having, and `if-no-files-found: error` so an empty artifact fails
+      # loudly here rather than publishing "0 tests" as a green check downstream.
+      - name: Upload test results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: test-results-unit
+          path: test-results/unit/*.xml
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: error
+
+      # publish-test-results.yaml runs on `workflow_run`, whose payload names the
+      # default branch rather than the branch under test. This file carries the
+      # original event so results attach to the right commit and pull request.
+      - name: Upload GitHub event file
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: github-event
+          path: ${{ github.event_path }}
+          retention-days: 7
+          if-no-files-found: error
+
+      # Coverage is already produced in Codecov's own format; only the upload
+      # waits. To enable: add the CODECOV_TOKEN repository secret and uncomment.
+      # The badge does not depend on this -- update-badges reads coverage.xml.
+      #
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad # v5.5.3
+      #   with:
+      #     # CODECOV_TOKEN only authorises coverage uploads; the exposure does not
+      #     # warrant a dedicated environment.
+      #     token: ${{ secrets.CODECOV_TOKEN }} # zizmor: ignore[secrets-outside-env]
+      #     disable_search: true
+      #     files: coverage/coverage.xml
+      #     flags: unittests
+      #     # A Codecov outage must never block a merge.
+      #     fail_ci_if_error: false

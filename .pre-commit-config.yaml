@@ -4,8 +4,9 @@
 #
 #   uv run prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 #
-# `--no-verify` bypasses all of this locally. It does not bypass CI, and it does not
-# bypass the ruleset on main.
+# These hooks are the local half, and they are there to catch a mistake in the second
+# it is made. The enforcement is CI and the ruleset on main, neither of which can be
+# reached from a shell here.
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 
 repos:

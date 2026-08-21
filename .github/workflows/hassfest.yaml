@@ -1,0 +1,59 @@
+name: hassfest
+
+# Unlike ci.yaml, this runs on a schedule as well as on commits. ci.yaml tests
+# this repository's code against pinned inputs, so with no commit nothing can
+# change and a scheduled run would re-prove yesterday's result. hassfest
+# validates against rules that live upstream: the action runs the
+# ghcr.io/home-assistant/hassfest container image, pulled fresh at run time and
+# tracking Home Assistant's beta channel, so pinning the action to a SHA does not
+# freeze those rules. A new Home Assistant release can add a manifest requirement
+# or deprecate a key, and this integration becomes invalid having changed nothing
+# here.
+#
+# Without the schedule that failure would surface while cutting a release, mixed
+# in with whatever else changed. A scheduled run surfaces it on its own, and
+# weekly is enough: Home Assistant ships monthly, so a week is well inside the
+# window between a rule changing and a release needing it. `workflow_dispatch`
+# covers wanting the answer now.
+on:
+  push:
+    # Every branch, no tags. A `v*` tag push runs this through release.yaml
+    # instead, as one of the gates on publishing; without the exclusion it would
+    # run twice for one push.
+    #
+    # `branches: ['**']` and not `tags-ignore: ['**']`, which reads like the same
+    # thing and is not: defining only a tag filter leaves branches the undefined
+    # ref, and GitHub then runs the workflow for neither.
+    branches: ['**']
+  pull_request:
+  schedule:
+    - cron: '10 3 * * 1' # Mondays at 03:10 UTC
+  workflow_dispatch:
+  workflow_call: # release.yaml gates the publish on this
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Home Assistant documents this as `@master`, and the only tagged release
+      # of home-assistant/actions is 1.0.0 from 2020 -- pinning to it would
+      # freeze the wrapper five years behind. The SHA below is master as of
+      # 2026-08-03; `zizmor --pedantic` requires a SHA, and Dependabot moves it.
+      # Pinning changes nothing about which rules apply: the container image is
+      # still pulled at run time.
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
