@@ -29,6 +29,12 @@ jobs:
     permissions:
       actions: read # download artifacts from the triggering run
       checks: write # post the check on the commit
+      # PRIVATE-ONLY, remove when the repository goes public in phase 6.
+      # `compare_to_earlier_commit` fetches the pull request's base commit through
+      # `GET /repos/{owner}/{repo}/commits/{sha}`, which needs `contents: read` on
+      # a private repository; on a public one `metadata: read` already grants it.
+      # Without this the action creates the check, then fails with 403 Forbidden.
+      contents: read
       pull-requests: write # post the pass/fail comment
     outputs:
       json: ${{ steps.publish.outputs.json }}

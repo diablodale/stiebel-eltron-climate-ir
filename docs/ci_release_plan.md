@@ -920,6 +920,41 @@ Six, none of them guessable from the plan alone:
   heading even when every commit in the range is a hidden type, so the file is never
   empty.
 
+### HACS validation: two failures, only one of them planned
+
+`hacs/action` runs nine checks. On the first push, seven passed — `brands`, `topics`,
+`description`, `license`, `archived`, `issues`, `information` — which settles every
+repository-settings question phase 0 and phase 1 raised, topics included. Two failed:
+
+- **`hacsjson`** — "The repository has no 'hacs.json' file". Planned. Phase 7 is
+  exactly this, and nothing before phase 7 can clear it.
+- **`integration_manifest`** — "expected a dictionary. Got None". **Not planned, and
+  not what it looks like.** Read against HACS's own validator
+  (`custom_components/hacs/validate/integration_manifest.py`), the check tests the
+  repository tree first and would have reported "the repository has no
+  'manifest.json' file" had the file been missing. It did not. So `manifest.json` was
+  found, and the *content* fetch that follows returned `None`. The file is present and
+  valid — Home Assistant loads it, and hassfest passes on it in the same push.
+
+  The likely cause is the repository being private: HACS reads file content from a
+  GitHub `download_url`, which for a private repository is a short-lived signed URL
+  its client may not be authenticating for. That would make this the second
+  private-only failure phase 5 found, alongside the `contents: read` one, and it
+  would clear in phase 6 rather than phase 7. **This is a hypothesis, not a
+  conclusion**, and it puts phase 0's assumption — that `hacs/action` "authenticates
+  with `${{ github.token }}` rather than reading the repository anonymously" — in
+  doubt. The alternative, something about this repository's layout, is less likely
+  but is not excluded.
+
+  Adding `hacs.json` does not test it: the code path that failed does not read
+  `hacs.json`. Going public does.
+
+**Consequence for phase 8.** `release.yaml` gates `publish` on HACS, so no release can
+be cut while either check is red. The existing phase order already handles that —
+public (6), then `hacs.json` (7), then the first release (8) — but this is on the
+critical path to a release rather than a cosmetic red square, and both checks have to
+be confirmed green before phase 8 begins.
+
 ## Phase 6 — Going public, community files and README badges
 
 One manual step by Dale opens this phase, because the badges added below are the
@@ -935,6 +970,34 @@ first thing that cannot work on a private repository:
 
 The signed-commits ruleset is already in place from phase 1; GitHub Pro allowed it to
 be created while the repository was still private.
+
+**Undo the private-only workarounds.** Search the tree for `PRIVATE-ONLY`; every one
+is a concession to the repository not being readable, and each should be removed and
+the workflow re-run to prove it was the only thing holding it up. As of phase 5 there
+is one:
+
+- `.github/workflows/publish-test-results.yaml` grants the publish job
+  `contents: read`. `EnricoMi/publish-unit-test-result-action` compares a pull
+  request against its base commit, which it fetches with `GET
+  /repos/{owner}/{repo}/commits/{sha}`; on a private repository that call needs
+  `contents: read`, and on a public one `metadata: read` already covers it. This was
+  not in the reference repo's copy of this workflow because that repository is
+  public — the first thing phase 5 found that the reference could not tell us.
+
+**Re-run HACS validation as soon as the repository is public**, before doing anything
+else in this phase:
+
+```bash
+gh workflow run hacs.yaml
+```
+
+Phase 5 left `integration_manifest` failing with "expected a dictionary. Got None"
+while HACS could see `manifest.json` in the tree but not read its content — see
+[HACS validation: two failures](#hacs-validation-two-failures-only-one-of-them-planned).
+If going public was the cause, that check turns green here with no code change, and
+`hacsjson` is then the only one left for phase 7. If it is **still** failing, the
+private-repository explanation is wrong, phase 7 will not fix it either, and it needs
+diagnosing now rather than at the first release — `release.yaml` gates on HACS.
 
 Then the files:
 
@@ -980,8 +1043,21 @@ stays default false; the layout already matches.
 Versions stay at `0.1.0` through every phase above — bumping them by hand is exactly
 what phase 4 exists to remove.
 
-**Exercise:** re-run `hacs.yaml` by `workflow_dispatch` and confirm the `hacsjson`
-check now passes.
+**Exercise:** re-run `hacs.yaml` by `workflow_dispatch` and confirm **all nine checks
+pass, not just `hacsjson`**. Phase 5 left two failing, and this phase addresses only
+one of them; `integration_manifest` is expected to have cleared in phase 6, when the
+repository went public. Read the run's log rather than its overall status, so the
+count is verified rather than assumed:
+
+```bash
+gh workflow run hacs.yaml
+# then, on the resulting run:
+gh api repos/diablodale/stiebel-eltron-climate-ir/actions/jobs/<JOB_ID>/logs \
+  | grep -aE "Validation|checks failed"
+```
+
+A green HACS run is a precondition for phase 8: `release.yaml` gates `publish` on it,
+so a red check here stops a release rather than merely reporting on one.
 
 ## Phase 8 — First release, `v0.5.0`
 

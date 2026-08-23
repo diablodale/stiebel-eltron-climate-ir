@@ -34,5 +34,22 @@ updates:
       timezone: Etc/UTC
     cooldown:
       default-days: 7
+    # pytest-homeassistant-custom-component pins both of these exactly -- 0.13.356
+    # requires `pytest==9.0.3` and `pytest-cov==7.1.0` -- so a bump of either is
+    # unsatisfiable against it, and the uv job fails instead of opening a pull
+    # request. Observed on the first run: Dependabot proposed pytest 9.1.1 and
+    # reported `dependency_file_not_resolvable`.
+    #
+    # No local command finds this. `pytest>=8` and `pytest==9.0.3` resolve fine
+    # together, and even `uv lock --upgrade` leaves pytest alone because that pin
+    # caps it. It only appears when something rewrites the declared constraint.
+    #
+    # The version of pytest is therefore not this repository's to choose; a bump
+    # of pytest-homeassistant-custom-component is what moves it, and Dependabot
+    # may still propose that. The `>=` floors in pyproject stay, recording what
+    # the code needs rather than what the resolver picks.
+    ignore:
+      - dependency-name: pytest
+      - dependency-name: pytest-cov
     commit-message:
       prefix: build
