@@ -156,7 +156,7 @@ jobs:
       # worth having, and `if-no-files-found: error` so an empty artifact fails
       # loudly here rather than publishing "0 tests" as a green check downstream.
       - name: Upload test results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: test-results-unit
@@ -165,7 +165,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload coverage
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: coverage
@@ -177,7 +177,7 @@ jobs:
       # default branch rather than the branch under test. This file carries the
       # original event so results attach to the right commit and pull request.
       - name: Upload GitHub event file
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: github-event
