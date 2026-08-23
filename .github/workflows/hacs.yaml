@@ -7,10 +7,9 @@ name: HACS
 # workflow would ever notice.
 on:
   push:
-    # Every branch, no tags; a `v*` tag push runs this through release.yaml
-    # instead. See hassfest.yaml for why this is `branches` and not
-    # `tags-ignore`.
-    branches: ['**']
+    # `main` only, matching ci.yaml -- see hassfest.yaml for why, and for why the
+    # tag exclusion is spelled with `branches` rather than `tags-ignore`.
+    branches: [main]
   pull_request:
   schedule:
     - cron: '10 3 * * 1' # Mondays at 03:10 UTC

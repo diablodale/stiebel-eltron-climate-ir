@@ -17,14 +17,18 @@ name: hassfest
 # covers wanting the answer now.
 on:
   push:
-    # Every branch, no tags. A `v*` tag push runs this through release.yaml
-    # instead, as one of the gates on publishing; without the exclusion it would
-    # run twice for one push.
+    # `main` only, matching ci.yaml. An earlier `branches: ['**']` ran this twice
+    # for every branch with a pull request open -- once for the branch push and
+    # once for the pull request, validating the same commit both times. A branch
+    # is validated when its pull request opens; before that, `workflow_dispatch`
+    # is how to ask.
     #
-    # `branches: ['**']` and not `tags-ignore: ['**']`, which reads like the same
-    # thing and is not: defining only a tag filter leaves branches the undefined
-    # ref, and GitHub then runs the workflow for neither.
-    branches: ['**']
+    # A branch filter also excludes tags, which is wanted: a `v*` tag push runs
+    # this through release.yaml as one of the gates on publishing, and without
+    # the exclusion that would run twice as well. `tags-ignore` is not the way to
+    # say it -- defining only a tag filter leaves branches the undefined ref, and
+    # GitHub then runs the workflow for neither.
+    branches: [main]
   pull_request:
   schedule:
     - cron: '10 3 * * 1' # Mondays at 03:10 UTC
