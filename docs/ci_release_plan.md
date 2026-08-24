@@ -1067,6 +1067,8 @@ first thing that cannot work on a private repository:
 The signed-commits ruleset is already in place from phase 1; GitHub Pro allowed it to
 be created while the repository was still private.
 
+Test text.
+
 **Undo the private-only workarounds.** Search the tree for `PRIVATE-ONLY`; every one
 is a concession to the repository not being readable, and each should be removed and
 the workflow re-run to prove it was the only thing holding it up. As of phase 5 there
