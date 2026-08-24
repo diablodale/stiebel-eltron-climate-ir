@@ -98,6 +98,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # `versions-agree` is a `language: system` hook whose entry is `uv run`, so
+      # uv has to exist here. Nothing more than uv: both tools it runs carry PEP
+      # 723 metadata declaring no dependencies, so `uv run --script` executes them
+      # against a bare interpreter and this job never installs the project. That
+      # matters -- syncing would mean fetching Home Assistant's 129 packages
+      # before CI could compare two version strings.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
       # Only `pre-commit` stage hooks run in an `--all-files` sweep, so the
       # commit-msg and pre-push hooks in .pre-commit-config.yaml are not part of
       # this. `cz check` has nothing to check without a message, and the pre-push

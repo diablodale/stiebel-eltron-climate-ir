@@ -22,6 +22,23 @@ manifest.json is the file every comparison runs against, because it is the one H
 Assistant and HACS actually read.
 """
 
+# PEP 723 inline metadata, so `uv run --script` runs this without the project
+# environment. It needs nothing but the standard library, and requiring the
+# project's 3.14 and its 129 packages to compare two version strings would mean
+# CI installing Home Assistant before it could run a git hook.
+#
+# `>=3.11` is the real floor -- `tomllib` arrived there -- not the project's
+# 3.14, so uv can use an interpreter that already exists rather than fetching
+# one. The consequence, accepted: the hook may run this on an older Python than
+# the tests do. It is stdlib-only, so there is nothing version-specific to
+# diverge, and `requires-python` states the actual requirement rather than
+# inheriting an unrelated one.
+#
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 import json
 import subprocess
 import sys

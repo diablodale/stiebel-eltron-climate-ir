@@ -82,7 +82,7 @@ repos:
         name: Commit signing is configured
         stages: [pre-commit]
         language: system
-        entry: uv run python tools/check_signing.py config
+        entry: uv run --script tools/check_signing.py config
         pass_filenames: false
         always_run: true
 
@@ -100,7 +100,7 @@ repos:
         name: pyproject and manifest.json agree on the version
         stages: [pre-commit]
         language: system
-        entry: uv run python tools/check_versions.py files
+        entry: uv run --script tools/check_versions.py files
         files: ^(pyproject\.toml|custom_components/stiebel_eltron_ir/manifest\.json)$
         pass_filenames: false
 
@@ -108,7 +108,7 @@ repos:
         name: Every pushed commit is signed
         stages: [pre-push]
         language: system
-        entry: uv run python tools/check_signing.py commits
+        entry: uv run --script tools/check_signing.py commits
         pass_filenames: false
         always_run: true
 
@@ -119,7 +119,7 @@ repos:
         name: Version tags match manifest.json
         stages: [pre-push]
         language: system
-        entry: uv run python tools/check_versions.py tags
+        entry: uv run --script tools/check_versions.py tags
         pass_filenames: false
         always_run: true
 

@@ -17,6 +17,16 @@ from a known key is what GitHub decides.
     commits   pre-push   -- does every commit about to leave carry a signature
 """
 
+# PEP 723 inline metadata, so `uv run --script` runs this without the project
+# environment -- see tools/check_versions.py for the reasoning. `>=3.11` matches
+# that file rather than anything this one needs; it is stdlib-only and would run
+# on far older.
+#
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 import subprocess
 import sys
 
