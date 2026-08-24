@@ -1045,6 +1045,8 @@ repository-settings question phase 0 and phase 1 raised, topics included. Two fa
   doubt. The alternative, something about this repository's layout, is less likely
   but is not excluded.
 
+  This is test text.
+
   Adding `hacs.json` does not test it: the code path that failed does not read
   `hacs.json`. Going public does.
 
