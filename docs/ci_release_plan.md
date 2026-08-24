@@ -967,7 +967,10 @@ have helped. Another, HACS validation, is large enough for its own section below
   `metadata: read`. The reference repo's copy of this workflow does not grant it
   because that repository is public. Because `update-badges` has
   `needs: [publish-test-results]`, this also meant the badge branch was never created
-  and none of that job's code had ever executed. Marked `PRIVATE-ONLY`; see phase 6.
+  and none of that job's code had ever executed. Marked `PRIVATE-ONLY` and removed in
+  phase 6, where a pull request on the public repository posted the comment with its
+  deltas intact — the deltas are the evidence, since producing them is what makes that
+  call.
 - **Dependabot cannot bump `pytest` or `pytest-cov`, ever.**
   `pytest-homeassistant-custom-component` 0.13.356 requires `pytest==9.0.3` and
   `pytest-cov==7.1.0` exactly, so Dependabot's proposal of pytest 9.1.1 was
@@ -1069,15 +1072,15 @@ be created while the repository was still private.
 
 **Undo the private-only workarounds.** Search the tree for `PRIVATE-ONLY`; every one
 is a concession to the repository not being readable, and each should be removed and
-the workflow re-run to prove it was the only thing holding it up. As of phase 5 there
-is one:
+the workflow re-run to prove it was the only thing holding it up. Phase 5 left one,
+now removed:
 
-- `.github/workflows/publish-test-results.yaml` grants the publish job
-  `contents: read`, so the action can read the commit it compares against — see
+- `.github/workflows/publish-test-results.yaml` granted the publish job
+  `contents: read`, so the action could read the commit it compares against — see
   [What only a real run could find](#what-only-a-real-run-could-find). On a public
-  repository `metadata: read` covers that read, so the line should come out. Removing
-  it and seeing the publish run stay green is the proof; if it 403s again, the
-  reasoning was wrong and the line goes back.
+  repository `metadata: read` covers that read. Done: with the grant gone, a pull
+  request's publish run posted its comment including the deltas, which are produced by
+  the call that used to 403.
 
 **Re-run HACS validation as soon as the repository is public**, before doing anything
 else in this phase:
@@ -1116,8 +1119,13 @@ Then the files:
 - One line in the README's Development section pointing at CONTRIBUTING, and a note
   that integration tests run only in the devcontainer.
 
-**Exercise:** open a test issue from each template and confirm the labeler applies
-the expected label; confirm every badge renders and links somewhere real.
+**Exercise:** open a test issue from each template and confirm the expected label is
+applied; confirm every badge renders and links somewhere real.
+
+Done. Both forms behaved as written. All five badges render anonymously, the two
+`img.shields.io/endpoint` ones showing the test count and the coverage percentage,
+which is also the first proof that the `badges` branch is readable without
+credentials.
 
 ## Phase 7 — `hacs.json`
 
