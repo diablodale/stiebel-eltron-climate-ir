@@ -1161,6 +1161,81 @@ gh api repos/diablodale/stiebel-eltron-climate-ir/actions/jobs/<JOB_ID>/logs \
 A green HACS run is a precondition for phase 8: `release.yaml` gates `publish` on it,
 so a red check here stops a release rather than merely reporting on one.
 
+Done, on the push rather than by `workflow_dispatch` — `hacs.yaml` also triggers on a
+push to `main`, so committing the file ran it. All nine passed. The overall status is
+sufficient evidence here without reading the log: the action fails the job when any
+one check fails, which the 1/9 run in phase 6 demonstrated by going red. That clears
+the release gate's last blocker.
+
+## Phase 7.1 — System health, and a bug form that leans on it
+
+**Settings ⇒ System ⇒ Repairs ⇒ the three-dot menu ⇒ System information** carries one
+section per integration that registers one — HACS has such a section — and its
+**Copy** button produces a block a reporter can paste whole. Registering a section
+turns things the bug form currently asks a human to type into data the integration
+states about itself.
+
+This sits before phase 8 rather than after it because the two halves only work
+together: the form can rely on the section only once a release contains the code that
+registers it, and phase 8 cuts the first release.
+
+**The file: `custom_components/stiebel_eltron_ir/system_health.py`.** A module-level
+`async_register(hass, register)` that calls `register.async_register_info(...)`, which
+is what `_process_system_health_platform` looks for. The older module-level
+`system_health.async_register_info` is deprecated and stops working in Home Assistant
+2027.1, so the platform form is the only one worth writing. Import
+`SystemHealthRegistration` under `TYPE_CHECKING` so nothing acquires a runtime
+dependency on another component and `manifest.json` needs no new key.
+
+The callback returns one flat dict, so keys are qualified per config entry — two
+appliances on one instance would otherwise collide:
+
+| key | why it is worth a row |
+| --- | --------------------- |
+| integration version | the manifest's own number, rather than one recalled from HACS |
+| appliance model | which decoder is loaded |
+| emitter entity id | the entity actually transmitting |
+| **emitter availability** | whether that entity exists and is not `unavailable` |
+| receiver entity id, or none | whether the handset is followed |
+
+Availability is the row that justifies the file on its own. "Nothing happens when I
+change the temperature" against an `unavailable` emitter is a report answered on
+sight, and no reporter would think to look.
+
+What it cannot report is the field that decides the most reports: emitter distance and
+line of sight. Nothing in software can see across a room, so that stays a human
+question and the form keeps asking it.
+
+`pytest-homeassistant-custom-component` exports `get_system_health_info`, so this is
+tested in the existing suite with no new dependency and no devcontainer.
+
+**Then `.github/ISSUE_TEMPLATE/bug_report.yml`:**
+
+- Replace the typed **Home Assistant version** input with a required
+  **system information** textarea, spelling out the copy path above. A typed version
+  is the field most often wrong — "latest", or a minor with no patch — and the paste
+  carries the exact version, installation type, Python version and architecture.
+- **No `render:` on it.** GitHub's form-schema reference documents `render` and
+  `required` separately and states no rule about combining them; a schema GitHub
+  rejects replaces the entire form with an error banner rather than failing one field,
+  which is not a risk worth taking for a monospace block. Home Assistant's block is a
+  markdown table and reads better rendered anyway.
+- **Extend the warning** at the top of the form to name system information alongside
+  debug logs. It carries the external URL and whether a cloud account exists, and
+  since the field is required a reporter cannot decline to paste it.
+- **Drop the receiver dropdown.** The section answers it, and it answers it correctly,
+  where "Not sure" never settled anything.
+- **Narrow the emitter input to hardware and firmware.** The entity id now arrives in
+  the paste; what the section cannot know is that it is a KC868-AG on ESPHome 2026.7.4.
+- **Keep the integration version input.** When the integration fails to load there is
+  no section in the paste at all, and that is exactly when bugs get filed.
+
+**Exercise:** run Home Assistant against the integration in the devcontainer, open the
+System information page, press **Copy**, and confirm the section is present in what
+lands on the clipboard — not merely on the page. Then open a test bug issue and
+confirm the form still renders and that the required field blocks submission when
+empty, since a rejected schema fails the whole form.
+
 ## Phase 8 — First release, `v0.5.0`
 
 Repository description, topics and Issues were set in phase 0; confirm they are
