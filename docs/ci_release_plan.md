@@ -864,7 +864,13 @@ git tag -d v0.1.0
 A release appearing means the gate does not work, and phase 8 must not proceed until
 it does.
 
-**Delete the tag afterwards, both places.** The phase 1 ruleset targets the default
+**Then tag a version that does *not* match `manifest.json`** and push that too. The
+run must stop at `version` in about twenty seconds with the other four jobs skipped,
+rather than spending the whole suite to reach the same answer. That is the reason
+`version` runs first and alone, and it is a second cheap proof that the workflow
+fails closed. Delete this tag as well.
+
+**Delete every test tag afterwards, both places.** The phase 1 ruleset targets the default
 branch and does not cover tags, so the deletion is allowed. It matters for phase 8:
 `cz bump 0.5.0` is given its version explicitly *because there is no tag to measure
 from*, and a leftover `v0.1.0` would silently change what that bump computes.
@@ -885,7 +891,7 @@ and integration, one pytest run since phase 4b), hassfest, and HACS.
 `ci.yaml`, `hassfest.yaml` and `hacs.yaml` each gained a `workflow_call` trigger, and
 release.yaml calls them as jobs that `publish` depends on:
 
-```
+```text
 version ─┬─> ci        ─┐
          ├─> hassfest  ─┼─> publish
          └─> hacs      ─┘
@@ -948,9 +954,9 @@ Six, none of them guessable from the plan alone:
 
 ### What only a real run could find
 
-The amendments above were written while writing the files. These three were invisible
+The amendments above were written while writing the files. These were invisible
 until the workflows actually ran, and each is a case where local validation could not
-have helped. A fourth, HACS validation, is large enough for its own section below.
+have helped. Another, HACS validation, is large enough for its own section below.
 
 - **The publish job needed `contents: read`.** All four of the first publish runs
   failed at `GET /repos/{owner}/{repo}/commits/{sha}` with 403, after creating the
@@ -982,6 +988,36 @@ have helped. A fourth, HACS validation, is large enough for its own section belo
   `ci.yaml`. The `pull_request` trigger has to stay regardless — once the repository
   is public, a fork's push raises no event here, so it is the only thing that
   validates a fork's contribution.
+- **`release.yaml` could never have published anything.** All four workflows built
+  their concurrency group from `${{ github.workflow }}`, which in a *called* workflow
+  resolves to the **caller's** name. On a tag push `release.yaml` and the three
+  workflows it calls therefore computed the identical string, and GitHub cancelled
+  the run: `Canceling since a deadlock was detected for concurrency group
+  'Release-refs/tags/v0.1.0' between a top level workflow and 'CI'`. The gate jobs
+  never started, `publish` waited on `needs` that never completed, and no tag could
+  have produced a release — on any version, ever.
+
+  Each group now uses a literal prefix (`ci-`, `hassfest-`, `hacs-`, `release-`)
+  that cannot change with the caller. `issue-labels.yaml` and
+  `publish-test-results.yaml` keep `${{ github.workflow }}`; neither is ever called
+  as a reusable workflow, so neither can collide.
+
+  **This is the entry that justifies the gate exercise being mandatory.** Nothing
+  local could find it: the expression is valid, `zizmor` passes, every workflow
+  parses, and all four had run correctly hundreds of times under `push`,
+  `pull_request`, `schedule` and `workflow_dispatch`. It appears only under
+  `workflow_call`, which only a tag push reaches. Deferring the test to phase 8 would
+  have meant discovering it while cutting the first real release.
+- **A gate run uploaded three artifacts nothing would read.** `ci.yaml` uploads
+  `test-results-unit`, `coverage` and `github-event` for one consumer,
+  `publish-test-results.yaml`, which triggers on `workflow_run` for runs named `CI`.
+  A called workflow's run is named for its caller, so on a release the consumer never
+  fires and the three sat unread for seven days — three unexplained entries on a
+  release page, which is a question rather than an answer. The uploads are now
+  guarded by `github.workflow == 'CI'`, matching that consumer's own filter. The
+  string `CI` is thereby coupled to three places: `name:` in `ci.yaml`, the guards,
+  and `workflows: ['CI']` in `publish-test-results.yaml`. Renaming the workflow means
+  changing all three, and nothing enforces it.
 
 ### HACS validation: two failures, only one of them planned
 
