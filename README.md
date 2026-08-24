@@ -41,8 +41,9 @@ device.
 
 ## Requirements
 
-- **Home Assistant 2026.8 or later.** The infrared entity platform arrived in
-  2026.6; 2026.8 is the floor this integration is developed and tested against.
+- **Home Assistant 2026.8.2 or later.** The infrared entity platform arrived in
+  2026.6; 2026.8.2 is the exact version this integration is developed and tested
+  against, and the floor `hacs.json` declares.
 - **An infrared emitter entity**, provided by some other integration — anything that
   offers an `infrared` entity with the emitter device class. The reference hardware
   is a [KC868-AG](https://www.kincony.com/) running ESPHome 2026.7.4, which exposes

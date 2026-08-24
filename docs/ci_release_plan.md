@@ -248,9 +248,11 @@ repeating it. Badges come later, in phase 6, once the workflows they link to exi
 
 **Requirements**
 
-- **Home Assistant 2026.8 or later.** The infrared entity platform arrived in
-  2026.6; 2026.8 is the floor this integration is developed and tested against, and
-  the number `hacs.json` declares.
+- **Home Assistant 2026.8.2 or later.** The infrared entity platform arrived in
+  2026.6; 2026.8.2 is the exact version this integration is developed and tested
+  against, and the number `hacs.json` declares. It is a patch-level floor because
+  `pytest-homeassistant-custom-component` pins one exact Home Assistant, so no other
+  version has been proven.
 - An integration providing an infrared **emitter** entity (`infrared` domain, device
   class emitter). Reference hardware: a KC868-AG running **ESPHome 2026.7.4**. Any
   emitter entity works.
@@ -1132,7 +1134,7 @@ credentials.
 ```json
 {
   "name": "Stiebel Eltron (infrared)",
-  "homeassistant": "2026.8.0",
+  "homeassistant": "2026.8.2",
   "hide_default_branch": true
 }
 ```
