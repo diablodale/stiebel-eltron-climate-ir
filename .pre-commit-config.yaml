@@ -75,6 +75,18 @@ repos:
 
   - repo: local
     hooks:
+      # The tools below run under `uv run --script`, so uv reads the PEP 723 block
+      # in each and builds an environment from it -- no project, no dependencies,
+      # just an interpreter satisfying `>=3.11`.
+      #
+      # `--no-python-downloads` keeps that from becoming a download. Without it uv
+      # is entitled to fetch an interpreter when it finds none, which would turn a
+      # git hook into a network operation on a machine that happens to be missing
+      # one. With it, uv uses any interpreter already present and otherwise stops
+      # with "No interpreter found for Python >=3.11", which is the useful answer.
+      # Not `--no-managed-python`: that refuses uv's own interpreters, and on a
+      # machine where those are the only ones it would break a working hook.
+      #
       # Signing is required. Neither local check verifies a signature -- this clone
       # points gpg.program at the Windows GnuPG, which cannot open the Linux temp
       # path `git verify-commit` hands it. See tools/check_signing.py.
@@ -82,7 +94,7 @@ repos:
         name: Commit signing is configured
         stages: [pre-commit]
         language: system
-        entry: uv run --script tools/check_signing.py config
+        entry: uv run --no-python-downloads --script tools/check_signing.py config
         pass_filenames: false
         always_run: true
 
@@ -100,7 +112,7 @@ repos:
         name: pyproject and manifest.json agree on the version
         stages: [pre-commit]
         language: system
-        entry: uv run --script tools/check_versions.py files
+        entry: uv run --no-python-downloads --script tools/check_versions.py files
         files: ^(pyproject\.toml|custom_components/stiebel_eltron_ir/manifest\.json)$
         pass_filenames: false
 
@@ -108,7 +120,7 @@ repos:
         name: Every pushed commit is signed
         stages: [pre-push]
         language: system
-        entry: uv run --script tools/check_signing.py commits
+        entry: uv run --no-python-downloads --script tools/check_signing.py commits
         pass_filenames: false
         always_run: true
 
@@ -119,7 +131,7 @@ repos:
         name: Version tags match manifest.json
         stages: [pre-push]
         language: system
-        entry: uv run --script tools/check_versions.py tags
+        entry: uv run --no-python-downloads --script tools/check_versions.py tags
         pass_filenames: false
         always_run: true
 
