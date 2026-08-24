@@ -843,6 +843,32 @@ see the test-results check and comment appear; merge to main and confirm the `ba
 branch is created with both JSON files; run `hassfest` and `hacs` via
 `workflow_dispatch` rather than waiting for the cron.
 
+Then prove the gate blocks. HACS is failing in this phase — see below — so a tag
+pushed now exercises `release.yaml` end to end and must produce **no release at all**.
+Refusing to publish on failed validation is the property the whole workflow exists
+for, and this phase is the only place it can be shown on demand: phase 7 makes HACS
+pass, and from then on a tag on a green tree publishes rather than blocks.
+
+Use `v0.1.0`, matching the current `manifest.json`, so the `version` job passes and
+the run reaches the gates instead of stopping at that cheap check:
+
+```bash
+git tag -s v0.1.0 -m "gate test"
+git push origin v0.1.0
+# expect: version ✓, ci ✓, hassfest ✓, hacs ✗, publish skipped
+gh release list                    # must be empty
+git push --delete origin v0.1.0
+git tag -d v0.1.0
+```
+
+A release appearing means the gate does not work, and phase 8 must not proceed until
+it does.
+
+**Delete the tag afterwards, both places.** The phase 1 ruleset targets the default
+branch and does not cover tags, so the deletion is allowed. It matters for phase 8:
+`cz bump 0.5.0` is given its version explicitly *because there is no tag to measure
+from*, and a leftover `v0.1.0` would silently change what that bump computes.
+
 ### The release gate
 
 The plan as written published on a `v*` tag push and checked nothing but the
@@ -920,6 +946,43 @@ Six, none of them guessable from the plan alone:
   heading even when every commit in the range is a hidden type, so the file is never
   empty.
 
+### What only a real run could find
+
+The amendments above were written while writing the files. These three were invisible
+until the workflows actually ran, and each is a case where local validation could not
+have helped. A fourth, HACS validation, is large enough for its own section below.
+
+- **The publish job needed `contents: read`.** All four of the first publish runs
+  failed at `GET /repos/{owner}/{repo}/commits/{sha}` with 403, after creating the
+  check run and before posting the comment.
+  `EnricoMi/publish-unit-test-result-action` fetches the commit it compares against —
+  a pull request's base, or on a push the previous commit on the branch — and that
+  read needs `contents: read` on a private repository, where a public one is served by
+  `metadata: read`. The reference repo's copy of this workflow does not grant it
+  because that repository is public. Because `update-badges` has
+  `needs: [publish-test-results]`, this also meant the badge branch was never created
+  and none of that job's code had ever executed. Marked `PRIVATE-ONLY`; see phase 6.
+- **Dependabot cannot bump `pytest` or `pytest-cov`, ever.**
+  `pytest-homeassistant-custom-component` 0.13.356 requires `pytest==9.0.3` and
+  `pytest-cov==7.1.0` exactly, so Dependabot's proposal of pytest 9.1.1 was
+  unsatisfiable and the whole uv update job failed with
+  `dependency_file_not_resolvable`. **No local command finds this**: `pytest>=8` and
+  `pytest==9.0.3` resolve together happily, and `uv lock --upgrade` — the most
+  aggressive local re-resolve there is — does not even mention pytest, because that
+  pin caps it. It appears only when something rewrites the declared constraint. Both
+  are now in `ignore` for the uv ecosystem. Their versions are not this repository's
+  to choose; bumping `pytest-homeassistant-custom-component` is what moves them, and
+  that is the same edit that moves the pinned Home Assistant, so Dependabot may still
+  propose it.
+- **hassfest and HACS ran twice for every pull request.** Their `push` trigger was
+  `branches: ['**']` while `ci.yaml`'s was `branches: [main]`, so a branch push and
+  then the pull request on that branch each triggered a run against the same commit.
+  Both now use `branches: [main]`. The consequence, accepted deliberately: a branch
+  with no pull request open gets no automatic run, which was already true of
+  `ci.yaml`. The `pull_request` trigger has to stay regardless — once the repository
+  is public, a fork's push raises no event here, so it is the only thing that
+  validates a fork's contribution.
+
 ### HACS validation: two failures, only one of them planned
 
 `hacs/action` runs nine checks. On the first push, seven passed — `brands`, `topics`,
@@ -977,12 +1040,11 @@ the workflow re-run to prove it was the only thing holding it up. As of phase 5 
 is one:
 
 - `.github/workflows/publish-test-results.yaml` grants the publish job
-  `contents: read`. `EnricoMi/publish-unit-test-result-action` compares a pull
-  request against its base commit, which it fetches with `GET
-  /repos/{owner}/{repo}/commits/{sha}`; on a private repository that call needs
-  `contents: read`, and on a public one `metadata: read` already covers it. This was
-  not in the reference repo's copy of this workflow because that repository is
-  public — the first thing phase 5 found that the reference could not tell us.
+  `contents: read`, so the action can read the commit it compares against — see
+  [What only a real run could find](#what-only-a-real-run-could-find). On a public
+  repository `metadata: read` covers that read, so the line should come out. Removing
+  it and seeing the publish run stay green is the proof; if it 403s again, the
+  reasoning was wrong and the line goes back.
 
 **Re-run HACS validation as soon as the repository is public**, before doing anything
 else in this phase:
@@ -1080,10 +1142,55 @@ Pushing the tag runs `release.yaml`, which publishes the GitHub Release. The fir
 `CHANGELOG.md` covers the whole development history; `changelog_start_rev` trims it
 if that reads as noise, and it can be edited before the push.
 
-**Exercise:** install the integration the way a stranger would — add the repo as a
-HACS custom repository on a real Home Assistant, install, restart, add the
-integration, pick an emitter, and confirm the climate, select and diagnostic-sensor
-entities appear.
+### The publish path runs for the first time here
+
+Phase 5 proves the gate **blocks**: a `v0.1.0` tag pushed while HACS was failing runs
+`release.yaml` end to end and produces no release. What that test could not reach is
+`publish` itself, because nothing was green to publish. This tag reaches it, so the
+half of the workflow that creates something is exercised here for the first time.
+
+**Before tagging, confirm all three gates are green on `main`**, since `publish`
+depends on every one of them:
+
+```bash
+gh run list --workflow=ci.yaml       --limit 1
+gh run list --workflow=hassfest.yaml --limit 1
+gh run list --workflow=hacs.yaml     --limit 1
+```
+
+Check HACS by its nine checks rather than by the run's status alone — phases 6 and 7
+each clear one of its two failures, and both must be gone. A red gate corrupts
+nothing; it leaves the tag on the remote with no release attached, and recovering
+means fixing the cause and re-running the workflow, or deleting the tag and
+recreating it once the fix is in — the phase 1 ruleset targets the default branch and
+does not cover tags, so that deletion is allowed.
+
+**Then read the run.** The same five jobs phase 5 watched, now reaching one further:
+
+```text
+version ─┬─> ci        ─┐
+         ├─> hassfest  ─┼─> publish
+         └─> hacs      ─┘
+```
+
+- `version` failing on its own, with the other four skipped, means `manifest.json` and
+  the tag disagree. It costs about twenty seconds rather than the whole suite, which
+  is why it runs first and alone.
+- `publish` skipped while all three gates are green means `needs` is wired wrongly.
+  That is the opposite of the failure phase 5 tested for — a gate that blocks
+  everything is as broken as one that blocks nothing — and this is the first phase in
+  which it can appear at all.
+
+**Exercise, in two parts.**
+
+1. **The release.** Confirm the GitHub Release exists and is attached to the tag, that
+   its notes came from `cz changelog` rather than the `--generate-notes` fallback, and
+   that all five jobs ran in the shape above.
+2. **The install, the way a stranger would.** Add the repo as a HACS custom repository
+   on a real Home Assistant, install, restart, add the integration, pick an emitter,
+   and confirm the climate, select and diagnostic-sensor entities appear. This is the
+   only step in the whole plan that exercises what a user actually receives, rather
+   than what CI says about it.
 
 ### What "HACS default repository" would mean later
 
