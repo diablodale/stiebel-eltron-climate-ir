@@ -158,12 +158,27 @@ jobs:
             --cov-report=lcov:coverage/lcov.info \
             --junitxml=test-results/unit/junit.xml
 
-      # `if: always()` because a failing test run is exactly when the results are
-      # worth having, and `if-no-files-found: error` so an empty artifact fails
-      # loudly here rather than publishing "0 tests" as a green check downstream.
+      # All three uploads exist for one consumer: publish-test-results.yaml, which
+      # triggers on `workflow_run` for runs named `CI` and downloads them by name.
+      #
+      # `github.workflow == 'CI'` is what confines them to the runs that consumer
+      # can see. A called workflow's run belongs to its caller, so when release.yaml
+      # calls this one the run is named `Release`, publish-test-results.yaml never
+      # fires for it, and these artifacts would sit unread for seven days -- three
+      # unexplained entries on a release, which is a question rather than an answer.
+      # That expression resolving to the caller's name is the same property that
+      # caused the concurrency deadlock above; here it is what the condition needs.
+      #
+      # The string is coupled to two other places: `name: CI` at the top of this
+      # file, and `workflows: ['CI']` in publish-test-results.yaml. All three have to
+      # agree, and renaming the workflow means changing all three.
+      #
+      # `always()` because a failing test run is exactly when the results are worth
+      # having, and `if-no-files-found: error` so an empty artifact fails loudly here
+      # rather than publishing "0 tests" as a green check downstream.
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && github.workflow == 'CI'
         with:
           name: test-results-unit
           path: test-results/unit/*.xml
@@ -172,19 +187,19 @@ jobs:
 
       - name: Upload coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && github.workflow == 'CI'
         with:
           name: coverage
           path: coverage/
           retention-days: 7
           if-no-files-found: error
 
-      # publish-test-results.yaml runs on `workflow_run`, whose payload names the
-      # default branch rather than the branch under test. This file carries the
-      # original event so results attach to the right commit and pull request.
+      # `workflow_run` payloads name the default branch rather than the branch under
+      # test, so this file carries the original event and results attach to the right
+      # commit and pull request.
       - name: Upload GitHub event file
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && github.workflow == 'CI'
         with:
           name: github-event
           path: ${{ github.event_path }}
