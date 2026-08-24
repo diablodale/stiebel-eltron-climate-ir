@@ -26,13 +26,9 @@ Assistant and HACS actually read.
 # environment. It needs nothing but the standard library, and requiring the
 # project's 3.14 and its 129 packages to compare two version strings would mean
 # CI installing Home Assistant before it could run a git hook.
-#
-# `>=3.11` is the real floor -- `tomllib` arrived there -- not the project's
-# 3.14, so uv can use an interpreter that already exists rather than fetching
-# one. The consequence, accepted: the hook may run this on an older Python than
-# the tests do. It is stdlib-only, so there is nothing version-specific to
-# diverge, and `requires-python` states the actual requirement rather than
-# inheriting an unrelated one.
+# `>=3.11` is the real floor -- `tomllib` arrived there
+# `--no-python-downloads`, so uv may not fetch what it cannot find, and
+# a GitHub runner ships 3.12.
 #
 # /// script
 # requires-python = ">=3.11"

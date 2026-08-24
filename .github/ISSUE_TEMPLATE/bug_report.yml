@@ -1,0 +1,149 @@
+name: Bug report 🐛
+description: Something the integration does that it should not, or fails to do
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Describe the problem
+
+        This form is for bugs and failures. For something the integration does not do
+        yet, [request it here instead](https://github.com/diablodale/stiebel-eltron-climate-ir/issues/new?template=feature_request.yml).
+
+        > [!WARNING]
+        > Home Assistant debug logs can contain tokens and network details. Read what
+        > you paste before you paste it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happens
+      description: What you expected, and what happened instead.
+      placeholder: >-
+        Example: setting the temperature to 21 turns the unit on, but the fan speed
+        jumps to high on its own. The remote does not do that from the same state.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: What you did, in order, starting from a known appliance state.
+      placeholder: |-
+        1. Appliance off
+        2. Set HVAC mode to cool
+        3. Set temperature to 21
+        4. Fan speed reads "high"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Setup
+
+        This integration transmits infrared, and infrared is one-way. It cannot see
+        whether the appliance received anything, so most reports come down to what
+        was sent and whether it arrived.
+
+  - type: dropdown
+    id: model
+    attributes:
+      label: Appliance model
+      options:
+        - ACP 35
+        - Other Stiebel Eltron model
+        - Not sure
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Settings ⇒ About. The integration needs 2026.6 or newer.
+      placeholder: "2026.8.2"
+    validations:
+      required: true
+
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      description: >-
+        HACS ⇒ this integration, or the `version` in
+        `custom_components/stiebel_eltron_ir/manifest.json`.
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: emitter
+    attributes:
+      label: Emitter
+      description: >-
+        The infrared transmitter Home Assistant drives, and what runs it. For an
+        ESPHome device, its ESPHome version too.
+      placeholder: "KC868-AG on ESPHome 2026.7.4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: placement
+    attributes:
+      label: Emitter distance and line of sight
+      description: >-
+        How far the emitter sits from the appliance's receiver window, and whether
+        anything is between them. This matters more than almost anything else on this
+        form: the original remote is held a metre away and pointed at the unit, while
+        an emitter is often taped somewhere convenient. A frame that is correct and
+        never arrives looks exactly like a frame that is wrong.
+      placeholder: >-
+        Example: about 3 m, mounted on the opposite wall, angled up at the indoor
+        unit, nothing in between. Or: 40 cm, taped to the casing below the display,
+        pointing along the wall rather than at the window.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: receiver
+    attributes:
+      label: Is an infrared receiver configured?
+      description: >-
+        The optional receiver that follows the physical remote and keeps Home
+        Assistant's state in step with it.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug logs
+      description: >-
+        Settings ⇒ Devices & services ⇒ this integration ⇒ Enable debug logging,
+        reproduce the problem, then disable it and attach the download. Logs at debug
+        level record every frame the integration sends and receives, which is usually
+        what settles the question.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: remote_capture
+    attributes:
+      label: Capture from the original remote, if you have one
+      description: >-
+        For anything where the integration and the handheld remote disagree, a
+        capture of the remote doing the same thing is decisive — the remote's
+        behaviour is the specification this integration is measured against.
+      render: text
+    validations:
+      required: false

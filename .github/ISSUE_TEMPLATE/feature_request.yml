@@ -1,0 +1,87 @@
+name: Feature request ✨
+description: Support for another appliance, another capability, or a change in behaviour
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## What you want
+
+        For something that is broken, [report it here
+        instead](https://github.com/diablodale/stiebel-eltron-climate-ir/issues/new?template=bug_report.yml).
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of request
+      options:
+        - Support for another appliance model
+        - A capability the remote has that the integration does not
+        - A change to how an existing entity behaves
+        - Something else
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What it should do, and what you would use it for.
+      placeholder: >-
+        Example: the remote has a "quiet" mode button that the integration does not
+        expose. I use it overnight and currently have to reach for the remote.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Evidence
+
+        This integration is derived from what the handheld remote transmits. Nothing
+        can be added by guessing at a frame — a wrong frame is indistinguishable from
+        a lost one, and the appliance never answers back.
+
+        For a new model or a new capability, captures from the original remote are
+        what make it possible. Without them a request can be recorded, but it cannot
+        be implemented.
+
+  - type: textarea
+    id: captures
+    attributes:
+      label: Captures from the original remote
+      description: >-
+        Raw timings or Pronto codes for the button in question, ideally several
+        presses from known appliance states so the changing bits can be isolated.
+        ESPHome's `remote_receiver` with `dump: raw` is one way; any capture that
+        preserves timings works.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: model
+    attributes:
+      label: Appliance model and remote model
+      description: Both, if the remote carries its own model number.
+      placeholder: "ACP 35, remote RG10A(B2S)/BGEF"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: hardware_access
+    attributes:
+      label: Do you have the appliance and remote to test against?
+      description: >-
+        Not a requirement. It decides whether a change can be verified before
+        release or only after.
+      options:
+        - Yes, both
+        - The appliance only
+        - The remote only
+        - Neither
+      default: 0
+    validations:
+      required: true

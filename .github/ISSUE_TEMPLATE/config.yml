@@ -1,0 +1,15 @@
+# No blank issues: both forms below ask for the details that decide an answer, and a
+# free-form issue almost never contains them.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Home Assistant modbus integration
+    url: https://www.home-assistant.io/integrations/stiebel_eltron/
+    about: >-
+      For Stiebel Eltron products with a modbus interface. That is a different
+      integration in Home Assistant core, and a different range of products.
+  - name: Protocol notes for the ACP 35
+    url: https://github.com/diablodale/stiebel-eltron-climate-ir/blob/main/docs/Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md
+    about: >-
+      Frame layout, checksum and the capture logs the decoder was derived from.
+      Worth reading before reporting that a frame looks wrong.

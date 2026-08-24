@@ -1,5 +1,11 @@
 # Stiebel Eltron — infrared control for Home Assistant
 
+[![CI](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/ci.yaml/badge.svg)](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/ci.yaml)
+[![hassfest](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/hassfest.yaml)
+[![HACS](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/hacs.yaml/badge.svg)](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/hacs.yaml)
+[![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/diablodale/stiebel-eltron-climate-ir/badges/tests.json)](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/publish-test-results.yaml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/diablodale/stiebel-eltron-climate-ir/badges/coverage.json)](https://github.com/diablodale/stiebel-eltron-climate-ir/actions/workflows/publish-test-results.yaml)
+
 Drive Stiebel Eltron appliances from Home Assistant over infrared, using the
 [infrared entity platform](https://developers.home-assistant.io/blog/2026/03/30/infrared-entity-platform/)
 introduced in Home Assistant 2026.6.
@@ -157,41 +163,17 @@ measured, and what it ruled out, is in [plan.md](docs/ha_ir_platform/plan.md).
 
 ## Development
 
+Everything a contributor needs is in [CONTRIBUTING.md](CONTRIBUTING.md): setup,
+running the tests, the three hardware markers and what `HW_RESTORE` gates, coverage,
+the git hooks, commit conventions, signed commits and how a release is cut.
+
 ```bash
 uv sync
-uv run pytest                    # every test: codecs, tooling and the integration
-uv run pytest --cov              # the same, with coverage of the whole codebase
-uv run pytest tests/unit -p no:homeassistant   # the fast loop, ~3s
-uv run prek install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+uv run pytest
 ```
 
-That is the whole setup, on Linux, macOS or Windows. The integration tests need no
-container: Home Assistant and its test fixtures come from
-`pytest-homeassistant-custom-component`, pinned to one exact Home Assistant so the
-tests prove the integration against a known version. VS Code's Test Explorer drives
-the same run, including **Run Tests with Coverage**.
-
-`uv sync` keeps the environment in uv's cache and makes `.venv` a link to it, which
-`pyproject.toml` asks for with uv's `centralized-project-envs`. Activation, the git
-hooks and the editor all use `.venv` as usual and need to know nothing about it.
-
-That matters on one kind of machine and is invisible on the rest. Home Assistant
-brings 129 packages, and the fixtures that walk them are punishing over a filesystem
-that is not native — measured on a checkout under WSL2's `/mnt/c`, with the cache on
-ext4 where uv puts it by default:
-
-| | environment beside the repo | environment in uv's cache |
-| - | --------------------------- | ------------------------- |
-| `uv sync` | ~20 min | 2.2 s |
-| nine integration tests | 19.0 s | 3.2 s |
-| whole suite | 7m34s | ~1m35s |
-
-An older uv ignores the unknown preview name with a warning and creates an ordinary
-`.venv` directory, which works exactly as it always did.
-
-Hardware tests are deselected by default and need the KC868-AG, the appliance, or a
-human; the devcontainer is still how Home Assistant itself is run against this
-integration. See [devcontainer.md](docs/ha_ir_platform/devcontainer.md).
+That is the whole setup, on Linux, macOS or Windows. The tests need no container —
+Home Assistant and its fixtures arrive as a pinned dev dependency.
 
 ## Trademark Legal Notices
 
