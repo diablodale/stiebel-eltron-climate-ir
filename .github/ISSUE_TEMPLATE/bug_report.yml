@@ -19,10 +19,11 @@ body:
     id: description
     attributes:
       label: What happens
-      description: What you expected, and what happened instead.
+      description: What happens, and what you expect.
       placeholder: >-
         Example: setting the temperature to 21 turns the unit on, but the fan speed
-        jumps to high on its own. The remote does not do that from the same state.
+        jumps to high on its own. I expected it to be low fan. The remote does not
+        do that from the same state.
     validations:
       required: true
 

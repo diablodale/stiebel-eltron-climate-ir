@@ -23,6 +23,22 @@ not overlap and can be installed together.
 | ----- | ----------------- | ------ |
 | ACP 35 air conditioner | [Stiebel Eltron air conditioner ACP 35.md](docs/Stiebel%20Eltron%20air%20conditioner%20ACP%2035.md) | TZ20160122 |
 
+Each protocol was derived by a clean-room, black-box method: open source tools and a
+generic infrared receiver, no proprietary tooling.
+
+### ⚠️ Warning and disclaimer ⚠️
+
+Controlling a climate device by a method the manufacturer neither approves nor
+supports may void its warranty, interfere with its normal operation, degrade its
+performance, damage it, or cause property damage, injury or death.
+
+The author(s) of this project — its methodology, content and code alike — are not
+responsible for any damage or injury caused. **USE AT YOUR OWN RISK.**
+
+This project is not a substitute for professional advice. Consult a qualified
+technician or the manufacturer before controlling, modifying or repairing any
+device.
+
 ## Requirements
 
 - **Home Assistant 2026.8 or later.** The infrared entity platform arrived in
