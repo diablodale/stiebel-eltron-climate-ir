@@ -92,11 +92,34 @@ repos:
         language: system
         entry: uv run cz check --allow-abort --commit-msg-file
 
+      # `cz bump` writes both files together, so they can only disagree after an
+      # edit by hand -- and nothing else notices until a tag is pushed or a release
+      # runs. Scoped by `files` rather than `always_run`, so it runs when one of the
+      # two changes and stays out of the way otherwise.
+      - id: versions-agree
+        name: pyproject and manifest.json agree on the version
+        stages: [pre-commit]
+        language: system
+        entry: uv run python tools/check_versions.py files
+        files: ^(pyproject\.toml|custom_components/stiebel_eltron_ir/manifest\.json)$
+        pass_filenames: false
+
       - id: signed-commits
         name: Every pushed commit is signed
         stages: [pre-push]
         language: system
         entry: uv run python tools/check_signing.py commits
+        pass_filenames: false
+        always_run: true
+
+      # The same comparison release.yaml makes before publishing. Running it here
+      # too is what keeps a bad tag off the remote: caught locally it is one
+      # `git tag -d`, caught in CI it has to be deleted in two places.
+      - id: tags-match-manifest
+        name: Version tags match manifest.json
+        stages: [pre-push]
+        language: system
+        entry: uv run python tools/check_versions.py tags
         pass_filenames: false
         always_run: true
 
