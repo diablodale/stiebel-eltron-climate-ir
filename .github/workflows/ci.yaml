@@ -15,8 +15,14 @@ on:
 # Every job is read-only by default and adds only the scopes it needs.
 permissions: {}
 
+# The literal `ci-` prefix, not `${{ github.workflow }}`: in a called workflow that
+# expression resolves to the *caller's* name, so when release.yaml calls this one it
+# produced the same group as release.yaml's own, and GitHub cancelled the run with
+# "a deadlock was detected for concurrency group ... between a top level workflow
+# and 'CI'". A literal cannot collide that way. Same in hassfest.yaml, hacs.yaml and
+# release.yaml.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

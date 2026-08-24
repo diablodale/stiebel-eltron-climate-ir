@@ -37,8 +37,9 @@ on:
 
 permissions: {}
 
+# A literal prefix rather than `${{ github.workflow }}` -- see ci.yaml for why.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: hassfest-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

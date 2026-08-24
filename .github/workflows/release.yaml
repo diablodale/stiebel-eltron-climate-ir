@@ -23,8 +23,11 @@ permissions: {}
 
 # One release per tag, and `cancel-in-progress: false` because a publish that is
 # half done must finish rather than be superseded.
+# A literal prefix rather than `${{ github.workflow }}` -- see ci.yaml. Here it read
+# correctly as `Release-...`, but the three workflows this one calls resolved to the
+# same string and deadlocked against it, so all four are spelled the same way now.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
