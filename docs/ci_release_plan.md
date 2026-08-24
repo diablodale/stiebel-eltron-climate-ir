@@ -1035,6 +1035,8 @@ repository-settings question phase 0 and phase 1 raised, topics included. Two fa
   found, and the *content* fetch that follows returned `None`. The file is present and
   valid — Home Assistant loads it, and hassfest passes on it in the same push.
 
+  Test text.
+
   The likely cause is the repository being private: HACS reads file content from a
   GitHub `download_url`, which for a private repository is a short-lived signed URL
   its client may not be authenticating for. That would make this the second
