@@ -1035,18 +1035,15 @@ repository-settings question phase 0 and phase 1 raised, topics included. Two fa
   found, and the *content* fetch that follows returned `None`. The file is present and
   valid — Home Assistant loads it, and hassfest passes on it in the same push.
 
-  The likely cause is the repository being private: HACS reads file content from a
-  GitHub `download_url`, which for a private repository is a short-lived signed URL
-  its client may not be authenticating for. That would make this the second
-  private-only failure phase 5 found, alongside the `contents: read` one, and it
-  would clear in phase 6 rather than phase 7. **This is a hypothesis, not a
-  conclusion**, and it puts phase 0's assumption — that `hacs/action` "authenticates
-  with `${{ github.token }}` rather than reading the repository anonymously" — in
-  doubt. The alternative, something about this repository's layout, is less likely
-  but is not excluded.
-
-  Adding `hacs.json` does not test it: the code path that failed does not read
-  `hacs.json`. Going public does.
+  The cause was the repository being private: HACS reads file content from a GitHub
+  `download_url`, which for a private repository is a short-lived signed URL its
+  client was not authenticating for. **Confirmed in phase 6** — the first
+  `workflow_dispatch` run after the repository went public reported 1/9 failed, with
+  only `hacsjson` left, and no code changed between the two runs. That makes it the
+  second private-only failure phase 5 found, alongside the `contents: read` one, and
+  it corrects phase 0's assumption that `hacs/action` "authenticates with
+  `${{ github.token }}` rather than reading the repository anonymously". For file
+  content it does not.
 
 **Consequence for phase 8.** `release.yaml` gates `publish` on HACS, so no release can
 be cut while either check is red. The existing phase order already handles that —
@@ -1089,13 +1086,10 @@ else in this phase:
 gh workflow run hacs.yaml
 ```
 
-Phase 5 left `integration_manifest` failing with "expected a dictionary. Got None"
-while HACS could see `manifest.json` in the tree but not read its content — see
+Done: 1/9 failed, `hacsjson` alone. `integration_manifest` cleared with no code
+change, which confirms the private-repository explanation — see
 [HACS validation: two failures](#hacs-validation-two-failures-only-one-of-them-planned).
-If going public was the cause, that check turns green here with no code change, and
-`hacsjson` is then the only one left for phase 7. If it is **still** failing, the
-private-repository explanation is wrong, phase 7 will not fix it either, and it needs
-diagnosing now rather than at the first release — `release.yaml` gates on HACS.
+Phase 7 has the last check to clear.
 
 Then the files:
 
