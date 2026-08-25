@@ -12,8 +12,10 @@ body:
         yet, [request it here instead](https://github.com/diablodale/stiebel-eltron-climate-ir/issues/new?template=feature_request.yml).
 
         > [!WARNING]
-        > Home Assistant debug logs can contain tokens and network details. Read what
-        > you paste before you paste it.
+        > System information and debug logs both carry private details like your external
+        > URL, whether you hold a cloud account, tokens, network addresses. Read what
+        > you paste before you paste it, and remove anything you would rather not
+        > publish.
 
   - type: textarea
     id: description
@@ -61,12 +63,13 @@ body:
     validations:
       required: true
 
-  - type: input
-    id: ha_version
+  - type: textarea
+    id: system_info
     attributes:
-      label: Home Assistant version
-      description: Settings ⇒ About. The integration needs 2026.8.2 or newer.
-      placeholder: "2026.8.2"
+      label: Home Assistant system information
+      description: >-
+        Settings ⇒ System ⇒ Repairs ⇒ the three-dot menu ⇒ System information, then
+        (Copy) button at the bottom, and paste it here.
     validations:
       required: true
 
@@ -84,11 +87,11 @@ body:
   - type: input
     id: emitter
     attributes:
-      label: Emitter
+      label: Emitter hardware
       description: >-
-        The infrared transmitter Home Assistant drives, and what runs it. For an
-        ESPHome device, its ESPHome version too.
-      placeholder: "KC868-AG on ESPHome 2026.7.4"
+        Which device transmits, and what firmware runs it. Its entity id already
+        arrives with the system information above; what board that entity is does not.
+      placeholder: "KC868-AG gateway with ESP32 on ESPHome 2026.7.4"
     validations:
       required: true
 
@@ -106,21 +109,6 @@ body:
         Example: about 3 m, mounted on the opposite wall, angled up at the indoor
         unit, nothing in between. Or: 40 cm, taped to the casing below the display,
         pointing along the wall rather than at the window.
-    validations:
-      required: true
-
-  - type: dropdown
-    id: receiver
-    attributes:
-      label: Is an infrared receiver configured?
-      description: >-
-        The optional receiver that follows the physical remote and keeps Home
-        Assistant's state in step with it.
-      options:
-        - "No"
-        - "Yes"
-        - Not sure
-      default: 0
     validations:
       required: true
 

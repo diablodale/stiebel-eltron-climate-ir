@@ -1187,16 +1187,28 @@ is what `_process_system_health_platform` looks for. The older module-level
 `SystemHealthRegistration` under `TYPE_CHECKING` so nothing acquires a runtime
 dependency on another component and `manifest.json` needs no new key.
 
-The callback returns one flat dict, so keys are qualified per config entry — two
-appliances on one instance would otherwise collide:
+**The callback returns a flat mapping, and it has to.** The page renders one table
+row per key, and a value that is a dict is rendered only when it carries a `type` of
+`pending`, `failed` or `date`; any other object leaves the cell blank rather than
+expanding into a tree. Nesting is not available, so the shape is core's `network`
+section: a fixed set of rows, each a comma-separated list with one element per
+configured appliance, every element written as `value (state)`.
 
-| key | why it is worth a row |
-| --- | --------------------- |
-| integration version | the manifest's own number, rather than one recalled from HACS |
-| appliance model | which decoder is loaded |
-| emitter entity id | the entity actually transmitting |
-| **emitter availability** | whether that entity exists and is not `unavailable` |
-| receiver entity id, or none | whether the handset is followed |
+| row | holds |
+| --- | ----- |
+| `version` | the manifest's own number, rather than one recalled from HACS |
+| `models` | the appliance name and the config entry's state — `ACP 35 (loaded)`, or `ACP 35 (setup_error)` |
+| `emitters` | the entity that transmits, and whether it is `available`, `unavailable` or `missing` |
+| `receivers` | the same for the receiver, or `none (none)` where none is configured |
+
+Two rules make those rows readable across rather than only down. All three are built
+from one iteration of the config entries, so position *n* is the same appliance in
+every row. And an appliance with no receiver still occupies its position — without
+`none (none)` a second appliance's receiver would read as the first's.
+
+Every value comes from `entry.data`, never `entry.runtime_data`, so an entry that
+failed to set up is described as fully as one that loaded. That is the entry a bug is
+most likely to be filed against, and `runtime_data` does not exist on it.
 
 Availability is the row that justifies the file on its own. "Nothing happens when I
 change the temperature" against an `unavailable` emitter is a report answered on

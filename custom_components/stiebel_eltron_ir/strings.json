@@ -30,5 +30,13 @@
         "name": "Last known timer"
       }
     }
+  },
+  "system_health": {
+    "info": {
+      "version": "Version",
+      "models": "Models",
+      "emitters": "Emitters",
+      "receivers": "Receivers"
+    }
   }
 }
