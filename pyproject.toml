@@ -277,7 +277,7 @@ line-length = 88
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "T10"]
 # Home Assistant entity classes declare list-valued _attr_* at class level, and
 # ha-core ignores this rule for the same reason.
 ignore = ["RUF012"]
