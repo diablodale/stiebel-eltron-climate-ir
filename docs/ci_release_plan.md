@@ -1363,6 +1363,49 @@ version ─┬─> ci        ─┐
    only step in the whole plan that exercises what a user actually receives, rather
    than what CI says about it.
 
+Part 1 is done. The release is attached to the tag, is neither a draft nor a
+prerelease, and its notes open `## v0.5.0 (2026-08-25)` with `### Features` — so they
+came from `cz changelog`, where the `--generate-notes` fallback would have written
+`## What's Changed` and a list of pull requests. All five jobs ran in the shape drawn
+above, `publish` reached rather than skipped.
+
+Part 2 is done, and on real hardware. `v0.5.0` was added to a production Home
+Assistant as a HACS custom repository following the README's own steps, installed,
+restarted, and configured through the config flow. The appliance was then controlled
+from Home Assistant. All three entities arrived as documented: the climate entity, the
+appliance temperature unit as a `select`, and the last known timer as a diagnostic
+sensor disabled by default.
+
+**That is the plan's intended outcome met end to end** — a stranger can install this
+from a release, and every push is validated by the checks a HACS submission runs.
+
+### The same commit is validated twice, on purpose
+
+The first release produced **13 jobs across 5 runs**, four of them the same work
+twice: `Pre-commit checks`, `Test and coverage`, `hassfest` and `HACS validation` each
+ran once from the branch push and again inside `Release`.
+
+The cause is that `git push && git push --tags` is two events on one commit. `ci`,
+`hassfest` and `hacs` trigger on `push: branches: [main]`; `release.yaml`
+independently calls all three by `workflow_call`.
+
+**Keep it.** The gate validates the *tagged tree* rather than trusting that some
+earlier run covered it. A tag need not sit on `main`, and `main` can move between the
+two pushes. Here the trees were identical and the second pass looked wasteful; tag an
+older commit and the release run is the only thing that ever validated it.
+
+The alternative — having `release.yaml` look up existing check runs for the SHA and
+skip re-running — trades a self-contained gate for a lookup that can race the
+still-in-flight branch runs, and that can be satisfied by a run built from different
+workflow files. That is a worse gate for about ninety seconds of runner time, which is
+free on a public repository.
+
+Two things that are *not* duplicated, because earlier work already handled them:
+`publish-test-results` ran once, since a called workflow contributes jobs to the
+caller's run rather than a run of its own, so no second `workflow_run` fired; and the
+release's CI uploaded no artifacts, held back by the `github.workflow == 'CI'` guard
+from [Amendments, written while building it](#amendments-written-while-building-it).
+
 ### What "HACS default repository" would mean later
 
 HACS ships a curated default list, and anything on it is searchable and installable
