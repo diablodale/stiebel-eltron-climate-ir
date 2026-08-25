@@ -1301,7 +1301,7 @@ tags:
 ```bash
 uv run cz bump 0.5.0 --check-consistency
 git show --stat        # pyproject.toml, uv.lock, manifest.json, CHANGELOG.md
-git push && git push --tags
+git push --follow-tags
 ```
 
 `0.5.0` is given explicitly only because there is no tag to measure from; afterwards
@@ -1385,9 +1385,11 @@ The first release produced **13 jobs across 5 runs**, four of them the same work
 twice: `Pre-commit checks`, `Test and coverage`, `hassfest` and `HACS validation` each
 ran once from the branch push and again inside `Release`.
 
-The cause is that `git push && git push --tags` is two events on one commit. `ci`,
-`hassfest` and `hacs` trigger on `push: branches: [main]`; `release.yaml`
-independently calls all three by `workflow_call`.
+The cause is that one commit updates two refs, the branch and the tag, and GitHub
+raises a run per ref. `ci`, `hassfest` and `hacs` trigger on
+`push: branches: [main]`; `release.yaml` independently calls all three by
+`workflow_call`. Sending both refs in one `git push --follow-tags` rather than two
+pushes changes nothing here — the ref count is what matters, not the command count.
 
 **Keep it.** The gate validates the *tagged tree* rather than trusting that some
 earlier run covered it. A tag need not sit on `main`, and `main` can move between the

@@ -189,13 +189,18 @@ Releases are cut by hand and published by CI:
 
 ```bash
 uv run cz bump --check-consistency
-git push && git push --tags
+git push --follow-tags
 ```
 
 `cz bump` reads the conventional commits since the last tag, computes the version
 step, writes it into `pyproject.toml`, `uv.lock` and `manifest.json`, updates
 `CHANGELOG.md`, commits, and creates a signed annotated tag. Nothing in CI decides a
 version.
+
+`--follow-tags` rather than a second `git push --tags`: it sends only annotated tags
+reachable from the commits being pushed, where `--tags` sends every tag in the clone,
+experiments included. It is also one push rather than two, so the pre-push hook — and
+with it the whole test suite — runs once.
 
 Pushing the tag runs `release.yaml`, which re-runs the full test suite, hassfest and
 HACS validation against the tagged tree and publishes a GitHub Release only if all
