@@ -116,6 +116,17 @@ repos:
         files: ^(pyproject\.toml|custom_components/stiebel_eltron_ir/manifest\.json)$
         pass_filenames: false
 
+      # Home Assistant reads the translation and hassfest reads the source, so
+      # editing one alone fails nothing and shows the wrong text. Scoped the same
+      # way as the version check: it runs when one of the two moves.
+      - id: strings-agree
+        name: strings.json and the English translation agree
+        stages: [pre-commit]
+        language: system
+        entry: uv run --no-python-downloads --script tools/check_strings.py
+        files: ^custom_components/stiebel_eltron_ir/(strings\.json|translations/en\.json)$
+        pass_filenames: false
+
       - id: signed-commits
         name: Every pushed commit is signed
         stages: [pre-push]
