@@ -2,6 +2,12 @@
 
 Automatically generated from this repository's conventional commits.
 
+## v0.6.0 (2026-08-25)
+
+### Features
+
+- reconfigure flow for the emitter and receiver
+
 ## v0.5.0 (2026-08-25)
 
 ### Features
