@@ -343,6 +343,50 @@ Write a security fix as `fix(security): …` — it validates, bumps PATCH, and 
 the changelog. Record that convention in CONTRIBUTING so the dropped types do not
 come back as ad-hoc invented ones.
 
+#### Amendment — `cz_customize` after all
+
+**Everything above this line describes stock commitizen, and stock is no longer what
+this repository runs.** The section is left standing because it is what the stock
+plugin does, read from its source, and that is still the baseline the block below
+departs from. What changed, and why:
+
+The first changelog produced under stock carried a **Refactor** section, and a run of
+`refactor:` commits with nothing else would have bumped a patch release. Neither is
+wanted: internal restructuring is not something to announce, and a release made only
+of it is not a release.
+
+The fix is not a template edit. `refactor` and `perf` have to leave **both**
+`commit_parser` — which decides what reaches the changelog — and `bump_map` — which
+decides what moves the version. Removing them from only one leaves the other failure
+in place, and dropping them from the parser alone would produce a release heading with
+nothing under it. Both are class attributes of `ConventionalCommitsCz`, read off the
+plugin directly rather than settings that can be overridden, so changing either means
+`name = "cz_customize"` and a `[tool.commitizen.customize]` block restating the
+built-in plugin verbatim minus those two types.
+
+That accepts the upstream notice cited above — `cz_customize` is "likely to be removed
+or renamed in the next major release" (commitizen #1385) — as a known risk. It is
+pinned in `uv.lock`, so a rename cannot arrive unannounced; the cost is a config
+rewrite whenever the pin moves, against a wrong changelog and wrong version steps on
+every release until then.
+
+Two consequences of restating the plugin by hand:
+
+- **The changelog sections are named in full**, `Features` and `Fixes`, where stock
+  abbreviates to `Feat` and `Fix`. Once the block exists these labels are a choice
+  rather than a default, and the file is read by people who did not write the commits.
+  `change_type_map` and `change_type_order` have to agree, or a renamed section falls
+  out of the ordering. `BREAKING CHANGE` keeps its shouted spelling: it is the term
+  Conventional Commits defines, not an abbreviation.
+- **`cz commit`'s prompts lose the built-in plugin's Python filters** — the ones that
+  hyphenate a multi-word scope, strip a subject's trailing period and rewrap the body.
+  TOML cannot carry a callable. `cz check` is unaffected, and it is the hook that
+  enforces anything.
+
+`bump` remains in `schema_pattern`, so commitizen's own bump commit passes the
+`commit-msg` hook. Worth knowing before the first release: `cz bump` does not pass
+`--no-verify`, so every hook runs on the commit it makes.
+
 ### Refusing unsigned commits locally — `tools/check_signing.py`
 
 Signing is required, so the working copy refuses to produce or push an unsigned

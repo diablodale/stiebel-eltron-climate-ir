@@ -149,8 +149,8 @@ Two types have release consequences:
 
 | type | version step | changelog |
 | ---- | ------------ | --------- |
-| `feat` | minor | **Feat** |
-| `fix` | patch | **Fix** |
+| `feat` | minor | **Features** |
+| `fix` | patch | **Fixes** |
 | any type with `!`, or a `BREAKING CHANGE:` footer | minor while the project is pre-1.0 | its own section |
 
 `refactor`, `perf`, `docs`, `style`, `test`, `build`, `ci`, `chore` and `revert` are

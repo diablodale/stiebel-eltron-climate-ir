@@ -138,7 +138,7 @@ bump_pattern = '^((BREAKING[\-\ ]CHANGE|\w+)(\(.+\))?!?):'
 commit_parser = '^((?P<change_type>feat|fix|BREAKING CHANGE)(?:\((?P<scope>[^()\r\n]*)\)|\()?(?P<breaking>!)?|\w+!):\s(?P<message>.*)?'
 # Only gates which commits are considered; `commit_parser` does the selecting.
 changelog_pattern = '^((BREAKING[\-\ ]CHANGE|\w+)(\(.+\))?!?):'
-change_type_order = ["BREAKING CHANGE", "Feat", "Fix"]
+change_type_order = ["BREAKING CHANGE", "Features", "Fixes"]
 example = """fix: correct minor typos in code
 
 see the issue for details on the typos fixed
@@ -197,9 +197,15 @@ message_template = """\
 '^fix' = "PATCH"
 
 # Changelog headings. No `refactor`/`perf` rows, matching `commit_parser`.
+#
+# Whole words, where the built-in plugin abbreviates to "Feat" and "Fix". These are
+# read by people who did not write the commits, in a file where nothing else is
+# shortened. `BREAKING CHANGE` keeps its shouted spelling: it is the term
+# Conventional Commits defines, not an abbreviation, and it only ever heads a
+# section when a subject says it literally.
 [tool.commitizen.customize.change_type_map]
-feat = "Feat"
-fix = "Fix"
+feat = "Features"
+fix = "Fixes"
 
 # `cz commit` only. The built-in plugin attaches Python filters to the scope,
 # subject and body answers -- hyphenating a multi-word scope, requiring a subject
