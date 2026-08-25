@@ -1,6 +1,6 @@
 [project]
 name = "stiebel-eltron-ir"
-version = "0.1.0"
+version = "0.5.0"
 description = "IR protocol decoders/encoders for Stiebel Eltron appliances, and a Home Assistant integration built on them"
 # SPDX expression and file list, PEP 639. Not the `{ text = ... }` table, which the
 # same PEP deprecates.

@@ -2426,7 +2426,7 @@ wheels = [
 
 [[package]]
 name = "stiebel-eltron-ir"
-version = "0.1.0"
+version = "0.5.0"
 source = { virtual = "." }
 dependencies = [
     { name = "infrared-protocols" },
