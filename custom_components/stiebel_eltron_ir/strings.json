@@ -9,10 +9,22 @@
           "receiver": "Infrared receiver (optional)",
           "name": "Name"
         }
+      },
+      "reconfigure": {
+        "title": "Stiebel Eltron infrared",
+        "description": "Change the infrared emitter this appliance transmits through, or add or remove a receiver. The appliance's remembered state is kept. To rename it, use Rename on the entry instead.",
+        "data": {
+          "emitter": "Infrared emitter",
+          "receiver": "Infrared receiver (optional)"
+        }
       }
     },
+    "error": {
+      "emitter_in_use": "Choose a different emitter. Another Stiebel Eltron of this model is already controlled with this one. Two identical appliances on one emitter cannot be controlled separately because the protocol carries no appliance address."
+    },
     "abort": {
-      "already_configured": "This infrared emitter already drives a Stiebel Eltron of the same model. Two identical appliances cannot be controlled separately, because the protocol carries no device address."
+      "already_in_progress": "Another window is already adding a Stiebel Eltron of this model on this emitter. Finish or cancel that one first.",
+      "reconfigure_successful": "Reconfiguration was successful."
     }
   },
   "entity": {
