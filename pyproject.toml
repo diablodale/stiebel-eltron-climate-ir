@@ -37,7 +37,7 @@ Issues = "https://github.com/diablodale/stiebel-eltron-climate-ir/issues"
 dev = [
   "pytest>=8",
   "pytest-cov>=6",
-  "pytest-homeassistant-custom-component==0.13.356",
+  "pytest-homeassistant-custom-component==0.13.357",
   "commitizen>=4.18",
   "prek>=0.4",
 ]
