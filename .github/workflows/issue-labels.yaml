@@ -21,7 +21,7 @@ jobs:
       # `sync-labels: 1` removes a label again when an edit stops matching, so
       # the labels track the current text rather than accumulating.
       - name: Label the issue
-        uses: github/issue-labeler@c1b0f9f52a63158c4adc09425e858e87b32e9685 # v3.4
+        uses: github/issue-labeler@ccca1e16fcb66762200e616fc29b57b940c1cb67 # v3.5
         with:
           configuration-path: .github/issue-labels.yml
           enable-versioned-regex: 0
