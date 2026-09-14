@@ -1248,11 +1248,11 @@ wheels = [
 
 [[package]]
 name = "infrared-protocols"
-version = "9.0.0"
+version = "10.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8b/aa/fb324f9072974ef77004334ae46eec0498f4448bcb653799ce7291fb8c3c/infrared_protocols-9.0.0.tar.gz", hash = "sha256:3734faf7faf382f20c310905cd2548a3a14c6f0b9d62625b34b1782839f1ea3b", size = 30501, upload-time = "2026-08-03T10:09:10.203Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/7a/2f94e8b5b8f380722a622f2b0c80f0e8bd59c6fc85ee04cf469512f43479/infrared_protocols-10.0.0.tar.gz", hash = "sha256:68f6a6ee69ce7230f7cb302e0c2dfeaadf0ce835190bb2e8fabcbf2f52839138", size = 42888, upload-time = "2026-09-03T10:28:56.149Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/c7/3824d41eb8fac446b6d272c5e4a3fe47cc7f9f0d434ff59e7989f2591d31/infrared_protocols-9.0.0-py3-none-any.whl", hash = "sha256:84d9236bc43991d11df4ff884caa1f154edc5d9bb92cac5b15c804f64f80a73f", size = 47732, upload-time = "2026-08-03T10:09:09.107Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/4d/76b293d721ac28ff13923c928371c4f6b42ea4959f63225592dbc88abe3a/infrared_protocols-10.0.0-py3-none-any.whl", hash = "sha256:45676c51d125e001d0049a4a10a074211a5697a593ccfb1a3c78d820b2479f6e", size = 67790, upload-time = "2026-09-03T10:28:54.921Z" },
 ]
 
 [[package]]
