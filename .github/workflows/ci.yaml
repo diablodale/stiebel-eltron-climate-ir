@@ -129,7 +129,7 @@ jobs:
       # `latest` rather than the version in uv.lock: what a hook does is decided
       # by the `rev` pins in .pre-commit-config.yaml, and prek only runs them.
       - name: Run prek hooks
-        uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0
+        uses: j178/prek-action@1382ad72dea72f9d53832f2bcb65b3e87a947204 # v3.0.1
         env:
           SKIP: signing-configured
         with:
